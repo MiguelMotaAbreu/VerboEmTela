@@ -76,6 +76,31 @@ Antes de iniciar, mantenha o painel em tela cheia no monitor de 1920x1080 e deix
 
 Este executável é uma ferramenta de diagnóstico, não uma versão operacional para atendimento. A primeira execução no computador da unidade ainda precisa ser acompanhada e validada.
 
+### Configuração externa opcional
+
+Sem argumentos, o diagnóstico usa os padrões seguros de 1920x1080 e 5 FPS. Um arquivo externo pode ser informado sem modificar a pasta da aplicação:
+
+```powershell
+dotnet run --project src/VerboEmTela.Diagnostic -- --config C:\VerboEmTelaConfig\monitoring.json
+```
+
+Formato aceito nesta versão:
+
+```json
+{
+  "schemaVersion": 1,
+  "requiredWidth": 1920,
+  "requiredHeight": 1080,
+  "framesPerSecond": 5
+}
+```
+
+- Campos omitidos recebem os valores seguros acima.
+- A frequência pode variar de 5 a 10 FPS.
+- Outra versão, resolução diferente, JSON inválido ou campo desconhecido impede o início da captura.
+- O programa apenas lê o arquivo: não cria, modifica ou migra configurações automaticamente.
+- O arquivo contém somente parâmetros técnicos e deve permanecer fora das pastas de release.
+
 ## Executar as especificações
 
 ```powershell

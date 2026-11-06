@@ -3,6 +3,7 @@ using VerboEmTela.Core.Detection;
 using VerboEmTela.Core.Layout;
 using VerboEmTela.Windows.Application;
 using VerboEmTela.Windows.Capture;
+using VerboEmTela.Windows.Configuration;
 
 Console.OutputEncoding = Encoding.UTF8;
 
@@ -17,14 +18,16 @@ Console.CancelKeyPress += cancelHandler;
 
 try
 {
-    return await RunAsync(cancellation.Token);
+    return await RunAsync(args, cancellation.Token);
 }
 finally
 {
     Console.CancelKeyPress -= cancelHandler;
 }
 
-static async Task<int> RunAsync(CancellationToken cancellationToken)
+static async Task<int> RunAsync(
+    string[] commandLineArguments,
+    CancellationToken cancellationToken)
 {
     try
     {
@@ -39,9 +42,18 @@ static async Task<int> RunAsync(CancellationToken cancellationToken)
         }
 
         Console.WriteLine("VerboEmTela — diagnóstico visual sem OCR e sem voz");
+        var configuration = LoadConfiguration(commandLineArguments);
+        Console.WriteLine(
+            $"Configuração válida: {configuration.RequiredWidth}x" +
+            $"{configuration.RequiredHeight}, {configuration.FramesPerSecond:g} FPS.");
         Console.WriteLine("Procurando um único painel válido nos monitores disponíveis...");
 
-        var layoutRecognizer = new PanelLayoutRecognizer();
+        var layoutRecognizer = new PanelLayoutRecognizer(
+            new PanelLayoutRecognizerOptions
+            {
+                RequiredWidth = configuration.RequiredWidth,
+                RequiredHeight = configuration.RequiredHeight,
+            });
         var pixelCapture = new GdiScreenPixelCapture();
         var selector = new PanelMonitorSelector(
             new Win32DisplayMonitorProvider(),
@@ -59,14 +71,16 @@ static async Task<int> RunAsync(CancellationToken cancellationToken)
             $"Monitor selecionado: {monitor.DeviceName} " +
             $"({monitor.Bounds.Width}x{monitor.Bounds.Height} em " +
             $"{monitor.Bounds.Left},{monitor.Bounds.Top}).");
-        Console.WriteLine("Monitorando a 5 FPS. Pressione Ctrl+C para encerrar.");
+        Console.WriteLine(
+            $"Monitorando a {configuration.FramesPerSecond:g} FPS. " +
+            "Pressione Ctrl+C para encerrar.");
 
         var frameSource = new ScreenFrameSource(
             pixelCapture,
             new ScreenFrameSourceOptions
             {
                 Region = monitor.Bounds,
-                FramesPerSecond = 5,
+                FramesPerSecond = configuration.FramesPerSecond,
             });
         var monitoringRunner = new LayoutMonitoringRunner(layoutRecognizer);
 
@@ -84,11 +98,37 @@ static async Task<int> RunAsync(CancellationToken cancellationToken)
         Console.WriteLine("Monitoramento encerrado.");
         return 0;
     }
+    catch (ConfigurationException exception)
+    {
+        Console.Error.WriteLine($"Configuração inválida: {exception.Message}");
+        return 6;
+    }
     catch (Exception exception)
     {
         Console.Error.WriteLine($"Falha técnica: {exception.Message}");
         return 10;
     }
+}
+
+static MonitoringConfiguration LoadConfiguration(string[] commandLineArguments)
+{
+    if (commandLineArguments.Length == 0)
+    {
+        return MonitoringConfiguration.SafeDefault;
+    }
+
+    if (commandLineArguments.Length == 2 &&
+        string.Equals(
+            commandLineArguments[0],
+            "--config",
+            StringComparison.OrdinalIgnoreCase))
+    {
+        return new MonitoringConfigurationLoader().LoadFile(
+            commandLineArguments[1]);
+    }
+
+    throw new ConfigurationException(
+        "Uso esperado: VerboEmTela.Diagnostic [--config <arquivo.json>].");
 }
 
 static int ReportSelectionFailure(PanelMonitorSelectionResult selection)

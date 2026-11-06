@@ -6,6 +6,7 @@ using VerboEmTela.Core.Layout;
 using VerboEmTela.Core.Processing;
 using VerboEmTela.Windows.Application;
 using VerboEmTela.Windows.Capture;
+using VerboEmTela.Windows.Configuration;
 
 var specifications = new (string Name, Action Run)[]
 {
@@ -41,6 +42,9 @@ var specifications = new (string Name, Action Run)[]
     ("reports when Windows exposes no monitors", ReportsNoAvailableMonitors),
     ("reports layout changes without repeating stable frames", () => ReportsOnlyLayoutChanges().GetAwaiter().GetResult()),
     ("refuses a second application instance", RefusesSecondApplicationInstance),
+    ("uses safe monitoring configuration defaults", UsesSafeConfigurationDefaults),
+    ("loads a valid monitoring configuration", LoadsValidMonitoringConfiguration),
+    ("rejects unsafe or unknown configuration values", RejectsUnsafeMonitoringConfiguration),
 };
 
 var failures = new List<string>();
@@ -621,6 +625,55 @@ static void RefusesSecondApplicationInstance()
 
     using var reacquired = SingleInstanceLease.TryAcquire(instanceName);
     NotNull(reacquired, "The lease must be available after the first instance exits.");
+}
+
+static void UsesSafeConfigurationDefaults()
+{
+    var configuration = new MonitoringConfigurationLoader().Parse("{}");
+
+    Equal(1, configuration.SchemaVersion, "The safe schema version was not applied.");
+    Equal(1920, configuration.RequiredWidth, "The safe width was not applied.");
+    Equal(1080, configuration.RequiredHeight, "The safe height was not applied.");
+    Equal(5d, configuration.FramesPerSecond, "The safe frame rate was not applied.");
+}
+
+static void LoadsValidMonitoringConfiguration()
+{
+    var configuration = new MonitoringConfigurationLoader().Parse(
+        """
+        {
+          "schemaVersion": 1,
+          "requiredWidth": 1920,
+          "requiredHeight": 1080,
+          "framesPerSecond": 8
+        }
+        """);
+
+    Equal(8d, configuration.FramesPerSecond, "The configured frame rate was not loaded.");
+}
+
+static void RejectsUnsafeMonitoringConfiguration()
+{
+    var loader = new MonitoringConfigurationLoader();
+
+    Throws<ConfigurationException>(
+        () => loader.Parse("""{ "schemaVersion": 2 }"""),
+        "An incompatible schema version must be rejected.");
+    Throws<ConfigurationException>(
+        () => loader.Parse("""{ "requiredWidth": 1280, "requiredHeight": 720 }"""),
+        "An unvalidated resolution must be rejected.");
+    Throws<ConfigurationException>(
+        () => loader.Parse("""{ "framesPerSecond": 4 }"""),
+        "A frame rate below the safe range must be rejected.");
+    Throws<ConfigurationException>(
+        () => loader.Parse("""{ "framesPerSecond": 11 }"""),
+        "A frame rate above the safe range must be rejected.");
+    Throws<ConfigurationException>(
+        () => loader.Parse("""{ "framesPerSecond": 5, "framePerSecond": 6 }"""),
+        "An unknown property must be rejected.");
+    Throws<ConfigurationException>(
+        () => loader.Parse("{ invalid json"),
+        "Malformed JSON must be rejected.");
 }
 
 static CallDetector ArmedDetector()
