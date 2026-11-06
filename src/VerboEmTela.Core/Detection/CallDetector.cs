@@ -89,6 +89,7 @@ public sealed class CallDetector
 
         return new DetectedCall(
             key.Sector,
+            key.IdentityKind,
             key.Identity,
             key.Destination,
             observation.ObservedAt);
@@ -108,6 +109,7 @@ public sealed class CallDetector
 
     private sealed record ObservationKey(
         string Sector,
+        IdentityKind IdentityKind,
         string Identity,
         string Destination)
     {
@@ -115,6 +117,7 @@ public sealed class CallDetector
         {
             return new ObservationKey(
                 observation.Sector!,
+                observation.IdentityKind!.Value,
                 observation.Identity!,
                 observation.Destination!);
         }

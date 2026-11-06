@@ -22,6 +22,16 @@ O reconhecedor estrutural também recebe um quadro RGB24 em memória e classific
 
 Os testes atuais usam imagens sintéticas sem dados pessoais. A captura do monitor, a reprodução do vídeo real, OCR, fila e voz ainda não fazem parte desta fatia.
 
+O processador de quadros conecta essas duas partes e garante que:
+
+- texto só seja extraído quando o layout for uma chamada em tela cheia;
+- conteúdo já visível ao iniciar não seja enviado ao extrator;
+- nome tenha prioridade sobre senha;
+- senha seja preservada como tipo próprio quando não houver nome;
+- setor, identidade e destino venham da mesma leitura;
+- leitura incompleta não produza ocorrência nem desarme uma chamada potencialmente válida;
+- layout inválido desarme o pipeline até um novo painel normal.
+
 ## Executar as especificações
 
 ```powershell

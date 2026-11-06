@@ -6,6 +6,7 @@ public sealed record PanelObservation
         PanelMode mode,
         TimeSpan observedAt,
         string? sector = null,
+        IdentityKind? identityKind = null,
         string? identity = null,
         string? destination = null)
     {
@@ -19,6 +20,7 @@ public sealed record PanelObservation
         Mode = mode;
         ObservedAt = observedAt;
         Sector = sector;
+        IdentityKind = identityKind;
         Identity = identity;
         Destination = destination;
     }
@@ -28,6 +30,8 @@ public sealed record PanelObservation
     public TimeSpan ObservedAt { get; }
 
     public string? Sector { get; }
+
+    public IdentityKind? IdentityKind { get; }
 
     public string? Identity { get; }
 
@@ -45,10 +49,31 @@ public sealed record PanelObservation
         string identity,
         string destination)
     {
+        return FullScreenCall(
+            observedAt,
+            sector,
+            global::VerboEmTela.Core.Detection.IdentityKind.Name,
+            identity,
+            destination);
+    }
+
+    public static PanelObservation FullScreenCall(
+        TimeSpan observedAt,
+        string sector,
+        IdentityKind identityKind,
+        string identity,
+        string destination)
+    {
+        if (!Enum.IsDefined(identityKind))
+        {
+            throw new ArgumentOutOfRangeException(nameof(identityKind));
+        }
+
         return new PanelObservation(
             PanelMode.FullScreenCall,
             observedAt,
             Required(sector, nameof(sector)),
+            identityKind,
             Required(identity, nameof(identity)),
             Required(destination, nameof(destination)));
     }
