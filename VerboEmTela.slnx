@@ -1,0 +1,4 @@
+<Solution>
+  <Project Path="src/VerboEmTela.Core/VerboEmTela.Core.csproj" />
+  <Project Path="tests/VerboEmTela.Core.Specs/VerboEmTela.Core.Specs.csproj" />
+</Solution>
