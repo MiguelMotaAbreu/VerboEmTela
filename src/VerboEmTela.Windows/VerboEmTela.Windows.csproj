@@ -1,0 +1,11 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <AssemblyName>VerboEmTela.Windows</AssemblyName>
+    <RootNamespace>VerboEmTela.Windows</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../VerboEmTela.Core/VerboEmTela.Core.csproj" />
+  </ItemGroup>
+</Project>

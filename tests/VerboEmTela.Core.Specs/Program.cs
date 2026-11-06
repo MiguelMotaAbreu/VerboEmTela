@@ -4,6 +4,7 @@ using VerboEmTela.Core.Frames;
 using VerboEmTela.Core.Imaging;
 using VerboEmTela.Core.Layout;
 using VerboEmTela.Core.Processing;
+using VerboEmTela.Windows.Capture;
 
 var specifications = new (string Name, Action Run)[]
 {
@@ -31,6 +32,8 @@ var specifications = new (string Name, Action Run)[]
     ("resets processing state after a sequence ends", () => RunnerResetsAfterSequence().GetAwaiter().GetResult()),
     ("rejects an out-of-order frame sequence", RejectsOutOfOrderFrameSequence),
     ("resets processing state when a sequence is cancelled", () => CancelledRunnerResetsState().GetAwaiter().GetResult()),
+    ("converts padded BGR pixels into packed RGB", ConvertsPaddedBgrToPackedRgb),
+    ("streams screen frames from an explicit region", () => StreamsScreenFrames().GetAwaiter().GetResult()),
 };
 
 var failures = new List<string>();
@@ -392,6 +395,53 @@ static async Task CancelledRunnerResetsState()
         "Cancellation must clear the armed state.");
 }
 
+static void ConvertsPaddedBgrToPackedRgb()
+{
+    var source = new byte[]
+    {
+        30, 20, 10,
+        60, 50, 40,
+        0, 0,
+    };
+
+    var converted = PixelBufferConverter.PaddedBgr24ToRgb24(
+        source,
+        width: 2,
+        height: 1,
+        sourceStride: 8);
+
+    SequenceEqual(
+        new byte[] { 10, 20, 30, 40, 50, 60 },
+        converted,
+        "BGR to RGB conversion mismatch.");
+}
+
+static async Task StreamsScreenFrames()
+{
+    var capture = new StubScreenPixelCapture();
+    var region = new ScreenRegion(-192, 20, 192, 108);
+    var source = new ScreenFrameSource(
+        capture,
+        new ScreenFrameSourceOptions
+        {
+            Region = region,
+            FramesPerSecond = 60,
+        });
+
+    var frames = await TakeAsync(source.ReadFramesAsync(), count: 3);
+
+    Equal(3, frames.Count, "The screen source must produce the requested frames.");
+    Equal(3, capture.InvocationCount, "The screen must be captured once per emitted frame.");
+    Equal(region, capture.LastRegion, "The configured screen region was not preserved.");
+    True(
+        frames[0].ObservedAt <= frames[1].ObservedAt &&
+        frames[1].ObservedAt <= frames[2].ObservedAt,
+        "Screen frame timestamps must be monotonic.");
+    True(
+        frames.All(frame => frame.Frame.Width == 192 && frame.Frame.Height == 108),
+        "Captured frame dimensions must match the configured region.");
+}
+
 static CallDetector ArmedDetector()
 {
     var detector = new CallDetector();
@@ -473,6 +523,22 @@ static async Task<List<T>> CollectAsync<T>(IAsyncEnumerable<T> source)
     await foreach (var item in source)
     {
         items.Add(item);
+    }
+
+    return items;
+}
+
+static async Task<List<T>> TakeAsync<T>(IAsyncEnumerable<T> source, int count)
+{
+    var items = new List<T>(count);
+
+    await foreach (var item in source)
+    {
+        items.Add(item);
+        if (items.Count == count)
+        {
+            break;
+        }
     }
 
     return items;
@@ -591,6 +657,17 @@ static void Equal<T>(T expected, T actual, string message)
     }
 }
 
+static void SequenceEqual<T>(
+    IReadOnlyList<T> expected,
+    IReadOnlyList<T> actual,
+    string message)
+{
+    if (!expected.SequenceEqual(actual))
+    {
+        throw new InvalidOperationException(message);
+    }
+}
+
 static void False(bool value, string message)
 {
     if (value)
@@ -646,5 +723,21 @@ sealed class StubTextExtractor : IFrameTextExtractor
         ArgumentNullException.ThrowIfNull(frame);
         InvocationCount++;
         return Result;
+    }
+}
+
+sealed class StubScreenPixelCapture : IScreenPixelCapture
+{
+    public int InvocationCount { get; private set; }
+
+    public ScreenRegion LastRegion { get; private set; }
+
+    public Rgb24Frame Capture(ScreenRegion region)
+    {
+        InvocationCount++;
+        LastRegion = region;
+        var pixels = new byte[checked(region.Width * region.Height * 3)];
+        Array.Fill(pixels, (byte)245);
+        return new Rgb24Frame(region.Width, region.Height, pixels);
     }
 }

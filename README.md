@@ -40,6 +40,16 @@ A fonte de sequência e o executor assíncrono permitem reproduzir quadros tempo
 - conclusão, cancelamento ou falha limpam o estado do processador;
 - o tempo vem do quadro, preparando a troca futura pela captura real.
 
+O adaptador Windows adiciona uma primeira captura real de região de tela:
+
+- recebe coordenadas explícitas, inclusive negativas para monitores à esquerda;
+- captura no ritmo configurado, com padrão de 5 FPS;
+- converte o bitmap BGR do Windows para RGB24 em memória;
+- não grava imagens nem mantém histórico de quadros;
+- usa GDI/`BitBlt` como prova mínima sem dependências externas.
+
+O adaptador GDI é provisório. A versão candidata à produção continuará prevendo Desktop Duplication/DXGI, atrás do mesmo `IFrameSource`, após comparação de desempenho e confiabilidade.
+
 ## Executar as especificações
 
 ```powershell

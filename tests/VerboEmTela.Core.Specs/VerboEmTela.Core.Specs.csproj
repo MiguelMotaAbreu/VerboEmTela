@@ -1,5 +1,6 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
+    <TargetFramework>net10.0-windows</TargetFramework>
     <OutputType>Exe</OutputType>
     <AssemblyName>VerboEmTela.Core.Specs</AssemblyName>
     <RootNamespace>VerboEmTela.Core.Specs</RootNamespace>
@@ -7,5 +8,6 @@
 
   <ItemGroup>
     <ProjectReference Include="../../src/VerboEmTela.Core/VerboEmTela.Core.csproj" />
+    <ProjectReference Include="../../src/VerboEmTela.Windows/VerboEmTela.Windows.csproj" />
   </ItemGroup>
 </Project>
