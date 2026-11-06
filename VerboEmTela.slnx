@@ -1,5 +1,6 @@
 <Solution>
   <Project Path="src/VerboEmTela.Core/VerboEmTela.Core.csproj" />
+  <Project Path="src/VerboEmTela.Diagnostic/VerboEmTela.Diagnostic.csproj" />
   <Project Path="src/VerboEmTela.Windows/VerboEmTela.Windows.csproj" />
   <Project Path="tests/VerboEmTela.Core.Specs/VerboEmTela.Core.Specs.csproj" />
 </Solution>

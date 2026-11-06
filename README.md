@@ -20,7 +20,7 @@ O reconhecedor estrutural também recebe um quadro RGB24 em memória e classific
 - chamada em tela cheia com uma faixa de seção;
 - tela inválida por dimensão, estrutura incompleta, banner estreito ou obstrução relevante.
 
-Os testes atuais usam imagens sintéticas sem dados pessoais. A captura do monitor, a reprodução do vídeo real, OCR, fila e voz ainda não fazem parte desta fatia.
+Os testes atuais usam imagens sintéticas sem dados pessoais. A reprodução do vídeo real, OCR, fila e voz ainda não fazem parte desta fatia.
 
 O processador de quadros conecta essas duas partes e garante que:
 
@@ -57,6 +57,23 @@ A seleção inicial de monitor também é baseada na aparência do painel:
 - não retém os quadros usados durante a seleção.
 
 O adaptador GDI é provisório. A versão candidata à produção continuará prevendo Desktop Duplication/DXGI, atrás do mesmo `IFrameSource`, após comparação de desempenho e confiabilidade.
+
+## Executar o diagnóstico visual
+
+O diagnóstico conecta seleção de monitor, captura e reconhecimento de layout, mas não executa OCR nem voz:
+
+```powershell
+dotnet run --project src/VerboEmTela.Diagnostic
+```
+
+Antes de iniciar, mantenha o painel em tela cheia no monitor de 1920x1080 e deixe o terminal no outro monitor. O programa:
+
+- encerra se encontrar zero ou mais de um painel válido;
+- captura a 5 FPS e imprime apenas mudanças entre painel normal, chamada em tela cheia e painel inválido;
+- não mostra textos do painel, não grava imagens e não cria logs;
+- encerra com `Ctrl+C`.
+
+Este executável é uma ferramenta de diagnóstico, não uma versão operacional para atendimento. A primeira execução no computador da unidade ainda precisa ser acompanhada e validada.
 
 ## Executar as especificações
 

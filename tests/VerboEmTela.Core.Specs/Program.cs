@@ -38,6 +38,7 @@ var specifications = new (string Name, Action Run)[]
     ("reports when no monitor contains the panel", ReportsNoPanelMonitor),
     ("rejects an ambiguous panel monitor selection", RejectsAmbiguousPanelMonitors),
     ("reports when Windows exposes no monitors", ReportsNoAvailableMonitors),
+    ("reports layout changes without repeating stable frames", () => ReportsOnlyLayoutChanges().GetAwaiter().GetResult()),
 };
 
 var failures = new List<string>();
@@ -561,6 +562,42 @@ static void ReportsNoAvailableMonitors()
         "The absence of monitors must be explicit.");
     Equal(0, result.ScannedMonitorCount, "No monitor should be scanned.");
     Equal(0, capture.InvocationCount, "Screen capture must not run without monitors.");
+}
+
+static async Task ReportsOnlyLayoutChanges()
+{
+    var dashboard = DashboardFrame();
+    var call = SyntheticFrame((22, 6, 0.90));
+    var darkInvalid = SolidFrame(192, 108, 30, 30, 30);
+    var lightInvalid = SolidFrame(192, 108, 245, 245, 245);
+    var source = new FrameSequenceSource(new[]
+    {
+        new CapturedFrame(dashboard, Ms(0)),
+        new CapturedFrame(dashboard, Ms(200)),
+        new CapturedFrame(call, Ms(400)),
+        new CapturedFrame(call, Ms(600)),
+        new CapturedFrame(darkInvalid, Ms(800)),
+        new CapturedFrame(lightInvalid, Ms(1_000)),
+    });
+    var runner = new LayoutMonitoringRunner(TestLayoutRecognizer());
+
+    var events = await CollectAsync(runner.RunAsync(source));
+
+    Equal(4, events.Count, "Only layout state changes must be reported.");
+    Equal(PanelMode.Dashboard, events[0].Mode, "The initial dashboard was not reported.");
+    Equal(Ms(0), events[0].ObservedAt, "The initial timestamp was not preserved.");
+    Equal(PanelMode.FullScreenCall, events[1].Mode, "The call transition was not reported.");
+    Equal(Ms(400), events[1].ObservedAt, "The call timestamp was not preserved.");
+    Equal(PanelMode.Invalid, events[2].Mode, "The invalid transition was not reported.");
+    Equal(
+        LayoutRejectionReason.InsufficientLightBackground,
+        events[2].RejectionReason,
+        "The first invalid reason was not preserved.");
+    Equal(PanelMode.Invalid, events[3].Mode, "A changed invalid reason must be reported.");
+    Equal(
+        LayoutRejectionReason.UnexpectedGreenBandCount,
+        events[3].RejectionReason,
+        "The changed invalid reason was not preserved.");
 }
 
 static CallDetector ArmedDetector()
