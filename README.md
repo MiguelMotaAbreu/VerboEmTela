@@ -74,6 +74,15 @@ Antes de iniciar, mantenha o painel em tela cheia no monitor de 1920x1080 e deix
 - recusa uma segunda instância na mesma sessão do Windows antes de capturar a tela;
 - encerra com `Ctrl+C`.
 
+O estado da aplicação é controlado separadamente do estado visual do painel:
+
+- inicia em `Iniciando` e passa a `Armando` depois da configuração e seleção do monitor;
+- só entra em `Monitorando` após observar o painel normal;
+- uma chamada já visível durante a inicialização não conclui o armamento;
+- perder o painel durante o monitoramento retorna a `Armando` e limpa conteúdo transitório;
+- pausa, retomada, erro, recuperação e encerramento também exigem limpeza;
+- transições incoerentes são recusadas pela máquina de estados.
+
 Este executável é uma ferramenta de diagnóstico, não uma versão operacional para atendimento. A primeira execução no computador da unidade ainda precisa ser acompanhada e validada.
 
 ### Configuração externa opcional

@@ -1,4 +1,5 @@
 using System.Text;
+using VerboEmTela.Core.Application;
 using VerboEmTela.Core.Detection;
 using VerboEmTela.Core.Layout;
 using VerboEmTela.Windows.Application;
@@ -29,6 +30,9 @@ static async Task<int> RunAsync(
     string[] commandLineArguments,
     CancellationToken cancellationToken)
 {
+    var stateMachine = new ApplicationStateMachine(
+        new DiagnosticTransientContentCleaner());
+
     try
     {
         using var instanceLease = SingleInstanceLease.TryAcquire(
@@ -36,12 +40,14 @@ static async Task<int> RunAsync(
 
         if (instanceLease is null)
         {
+            stateMachine.Stop();
             Console.Error.WriteLine(
                 "O VerboEmTela já está em execução nesta sessão do Windows.");
             return 5;
         }
 
         Console.WriteLine("VerboEmTela — diagnóstico visual sem OCR e sem voz");
+        WriteApplicationStatus(stateMachine.Current);
         var configuration = LoadConfiguration(commandLineArguments);
         Console.WriteLine(
             $"Configuração válida: {configuration.RequiredWidth}x" +
@@ -63,6 +69,8 @@ static async Task<int> RunAsync(
 
         if (selection.Status is not PanelMonitorSelectionStatus.Selected)
         {
+            WriteApplicationStatus(stateMachine.Fail(
+                "Não foi possível selecionar um único painel válido."));
             return ReportSelectionFailure(selection);
         }
 
@@ -74,6 +82,7 @@ static async Task<int> RunAsync(
         Console.WriteLine(
             $"Monitorando a {configuration.FramesPerSecond:g} FPS. " +
             "Pressione Ctrl+C para encerrar.");
+        WriteApplicationStatus(stateMachine.CompleteStartup());
 
         var frameSource = new ScreenFrameSource(
             pixelCapture,
@@ -88,26 +97,73 @@ static async Task<int> RunAsync(
             .RunAsync(frameSource, cancellationToken)
             .ConfigureAwait(false))
         {
+            UpdateApplicationState(stateMachine, state);
             Console.WriteLine(FormatState(state));
         }
 
+        WriteApplicationStatus(stateMachine.Stop());
         return 0;
     }
     catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
     {
+        if (stateMachine.Current.State is not ApplicationState.Stopped)
+        {
+            WriteApplicationStatus(stateMachine.Stop());
+        }
+
         Console.WriteLine("Monitoramento encerrado.");
         return 0;
     }
     catch (ConfigurationException exception)
     {
+        WriteApplicationStatus(stateMachine.Fail(exception.Message));
         Console.Error.WriteLine($"Configuração inválida: {exception.Message}");
         return 6;
     }
     catch (Exception exception)
     {
+        if (stateMachine.Current.State is not ApplicationState.Stopped)
+        {
+            WriteApplicationStatus(stateMachine.Fail(exception.Message));
+        }
+
         Console.Error.WriteLine($"Falha técnica: {exception.Message}");
         return 10;
     }
+}
+
+static void UpdateApplicationState(
+    ApplicationStateMachine stateMachine,
+    LayoutMonitoringEvent layout)
+{
+    if (layout.Mode is PanelMode.Dashboard &&
+        stateMachine.Current.State is ApplicationState.Arming)
+    {
+        WriteApplicationStatus(stateMachine.ConfirmPanelReady());
+    }
+    else if (layout.Mode is PanelMode.Invalid &&
+             stateMachine.Current.State is
+                 ApplicationState.Monitoring or ApplicationState.Speaking)
+    {
+        WriteApplicationStatus(stateMachine.ReportPanelLost());
+    }
+}
+
+static void WriteApplicationStatus(ApplicationStatus status)
+{
+    var description = status.State switch
+    {
+        ApplicationState.Starting => "Iniciando",
+        ApplicationState.Arming => "Armando",
+        ApplicationState.Monitoring => "Monitorando",
+        ApplicationState.Speaking => "Falando",
+        ApplicationState.Paused => "Pausado",
+        ApplicationState.Error => $"Erro — {status.ErrorReason}",
+        ApplicationState.Stopped => "Encerrado",
+        _ => "Desconhecido",
+    };
+
+    Console.WriteLine($"Estado da aplicação: {description}");
 }
 
 static MonitoringConfiguration LoadConfiguration(string[] commandLineArguments)
@@ -174,4 +230,11 @@ static string Describe(LayoutRejectionReason reason)
         LayoutRejectionReason.FirstBandOutsideExpectedRegion => "posição do painel inesperada",
         _ => "motivo não identificado",
     };
+}
+
+sealed class DiagnosticTransientContentCleaner : ITransientContentCleaner
+{
+    public void Clear()
+    {
+    }
 }

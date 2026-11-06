@@ -1,4 +1,5 @@
 using System.Diagnostics.CodeAnalysis;
+using VerboEmTela.Core.Application;
 using VerboEmTela.Core.Detection;
 using VerboEmTela.Core.Frames;
 using VerboEmTela.Core.Imaging;
@@ -45,6 +46,9 @@ var specifications = new (string Name, Action Run)[]
     ("uses safe monitoring configuration defaults", UsesSafeConfigurationDefaults),
     ("loads a valid monitoring configuration", LoadsValidMonitoringConfiguration),
     ("rejects unsafe or unknown configuration values", RejectsUnsafeMonitoringConfiguration),
+    ("follows valid application state transitions", FollowsValidApplicationStateTransitions),
+    ("rejects invalid application state transitions", RejectsInvalidApplicationStateTransitions),
+    ("clears transient content on safety transitions", ClearsTransientContentOnSafetyTransitions),
 };
 
 var failures = new List<string>();
@@ -676,6 +680,94 @@ static void RejectsUnsafeMonitoringConfiguration()
         "Malformed JSON must be rejected.");
 }
 
+static void FollowsValidApplicationStateTransitions()
+{
+    var machine = new ApplicationStateMachine(new CountingContentCleaner());
+
+    Equal(ApplicationState.Starting, machine.Current.State, "The initial state must be Starting.");
+    Equal(ApplicationState.Arming, machine.CompleteStartup().State, "Startup must enter Arming.");
+    Equal(
+        ApplicationState.Monitoring,
+        machine.ConfirmPanelReady().State,
+        "A ready panel must enter Monitoring.");
+    Equal(ApplicationState.Speaking, machine.BeginSpeaking().State, "Speech must enter Speaking.");
+    Equal(
+        ApplicationState.Monitoring,
+        machine.CompleteSpeaking().State,
+        "Completed speech must return to Monitoring.");
+    Equal(ApplicationState.Paused, machine.Pause().State, "Pause must enter Paused.");
+    Equal(ApplicationState.Arming, machine.Resume().State, "Resume must re-enter Arming.");
+    machine.ConfirmPanelReady();
+    Equal(
+        ApplicationState.Arming,
+        machine.ReportPanelLost().State,
+        "Panel loss must re-enter Arming.");
+
+    var failure = machine.Fail("  dispositivo de áudio indisponível  ");
+    Equal(ApplicationState.Error, failure.State, "Failure must enter Error.");
+    Equal(
+        "dispositivo de áudio indisponível",
+        failure.ErrorReason!,
+        "The current error reason must be trimmed and exposed.");
+    var recovered = machine.Recover();
+    Equal(ApplicationState.Arming, recovered.State, "Recovery must re-enter Arming.");
+    True(recovered.ErrorReason is null, "Recovery must clear the current error reason.");
+    Equal(ApplicationState.Stopped, machine.Stop().State, "Stop must be terminal.");
+}
+
+static void RejectsInvalidApplicationStateTransitions()
+{
+    var machine = new ApplicationStateMachine(new CountingContentCleaner());
+
+    Throws<InvalidOperationException>(
+        () => machine.ConfirmPanelReady(),
+        "Starting must not jump directly to Monitoring.");
+    Throws<InvalidOperationException>(
+        () => machine.BeginSpeaking(),
+        "Starting must not jump directly to Speaking.");
+
+    machine.CompleteStartup();
+    Throws<InvalidOperationException>(
+        () => machine.CompleteSpeaking(),
+        "Arming must not complete speech.");
+
+    machine.Stop();
+    Throws<InvalidOperationException>(
+        () => machine.Resume(),
+        "A stopped application must not resume.");
+    Throws<InvalidOperationException>(
+        () => machine.Fail("late failure"),
+        "A stopped application must remain terminal.");
+    Throws<ArgumentException>(
+        () => new ApplicationStateMachine(new CountingContentCleaner()).Fail("  "),
+        "An empty error reason must be rejected.");
+}
+
+static void ClearsTransientContentOnSafetyTransitions()
+{
+    var cleaner = new CountingContentCleaner();
+    var machine = new ApplicationStateMachine(cleaner);
+
+    machine.CompleteStartup();
+    machine.ConfirmPanelReady();
+    machine.BeginSpeaking();
+    machine.CompleteSpeaking();
+    Equal(0, cleaner.InvocationCount, "Ordinary progress must not clear transient content.");
+
+    machine.Pause();
+    machine.Resume();
+    machine.ConfirmPanelReady();
+    machine.ReportPanelLost();
+    machine.Fail("capture unavailable");
+    machine.Recover();
+    machine.Stop();
+
+    Equal(
+        6,
+        cleaner.InvocationCount,
+        "Pause, resume, panel loss, error, recovery and stop must each clear content.");
+}
+
 static CallDetector ArmedDetector()
 {
     var detector = new CallDetector();
@@ -1013,5 +1105,15 @@ sealed class MappedScreenPixelCapture : IScreenPixelCapture
         }
 
         return frame;
+    }
+}
+
+sealed class CountingContentCleaner : ITransientContentCleaner
+{
+    public int InvocationCount { get; private set; }
+
+    public void Clear()
+    {
+        InvocationCount++;
     }
 }
