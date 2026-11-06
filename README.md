@@ -71,6 +71,7 @@ Antes de iniciar, mantenha o painel em tela cheia no monitor de 1920x1080 e deix
 - encerra se encontrar zero ou mais de um painel válido;
 - captura a 5 FPS e imprime apenas mudanças entre painel normal, chamada em tela cheia e painel inválido;
 - não mostra textos do painel, não grava imagens e não cria logs;
+- recusa uma segunda instância na mesma sessão do Windows antes de capturar a tela;
 - encerra com `Ctrl+C`.
 
 Este executável é uma ferramenta de diagnóstico, não uma versão operacional para atendimento. A primeira execução no computador da unidade ainda precisa ser acompanhada e validada.

@@ -4,6 +4,7 @@ using VerboEmTela.Core.Frames;
 using VerboEmTela.Core.Imaging;
 using VerboEmTela.Core.Layout;
 using VerboEmTela.Core.Processing;
+using VerboEmTela.Windows.Application;
 using VerboEmTela.Windows.Capture;
 
 var specifications = new (string Name, Action Run)[]
@@ -39,6 +40,7 @@ var specifications = new (string Name, Action Run)[]
     ("rejects an ambiguous panel monitor selection", RejectsAmbiguousPanelMonitors),
     ("reports when Windows exposes no monitors", ReportsNoAvailableMonitors),
     ("reports layout changes without repeating stable frames", () => ReportsOnlyLayoutChanges().GetAwaiter().GetResult()),
+    ("refuses a second application instance", RefusesSecondApplicationInstance),
 };
 
 var failures = new List<string>();
@@ -598,6 +600,27 @@ static async Task ReportsOnlyLayoutChanges()
         LayoutRejectionReason.UnexpectedGreenBandCount,
         events[3].RejectionReason,
         "The changed invalid reason was not preserved.");
+}
+
+static void RefusesSecondApplicationInstance()
+{
+    var instanceName = $@"Local\VerboEmTela.Specs.{Guid.NewGuid():N}";
+    var first = SingleInstanceLease.TryAcquire(instanceName);
+
+    NotNull(first, "The first application instance must acquire the lease.");
+
+    try
+    {
+        using var second = SingleInstanceLease.TryAcquire(instanceName);
+        True(second is null, "A second application instance must be refused.");
+    }
+    finally
+    {
+        first.Dispose();
+    }
+
+    using var reacquired = SingleInstanceLease.TryAcquire(instanceName);
+    NotNull(reacquired, "The lease must be available after the first instance exits.");
 }
 
 static CallDetector ArmedDetector()

@@ -1,6 +1,7 @@
 using System.Text;
 using VerboEmTela.Core.Detection;
 using VerboEmTela.Core.Layout;
+using VerboEmTela.Windows.Application;
 using VerboEmTela.Windows.Capture;
 
 Console.OutputEncoding = Encoding.UTF8;
@@ -25,11 +26,21 @@ finally
 
 static async Task<int> RunAsync(CancellationToken cancellationToken)
 {
-    Console.WriteLine("VerboEmTela — diagnóstico visual sem OCR e sem voz");
-    Console.WriteLine("Procurando um único painel válido nos monitores disponíveis...");
-
     try
     {
+        using var instanceLease = SingleInstanceLease.TryAcquire(
+            @"Local\VerboEmTela.SingleInstance");
+
+        if (instanceLease is null)
+        {
+            Console.Error.WriteLine(
+                "O VerboEmTela já está em execução nesta sessão do Windows.");
+            return 5;
+        }
+
+        Console.WriteLine("VerboEmTela — diagnóstico visual sem OCR e sem voz");
+        Console.WriteLine("Procurando um único painel válido nos monitores disponíveis...");
+
         var layoutRecognizer = new PanelLayoutRecognizer();
         var pixelCapture = new GdiScreenPixelCapture();
         var selector = new PanelMonitorSelector(
