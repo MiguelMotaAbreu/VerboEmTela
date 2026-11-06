@@ -1,4 +1,6 @@
 using VerboEmTela.Core.Detection;
+using VerboEmTela.Core.Imaging;
+using VerboEmTela.Core.Layout;
 
 var specifications = new (string Name, Action Run)[]
 {
@@ -9,6 +11,13 @@ var specifications = new (string Name, Action Run)[]
     ("requires a dashboard after the panel becomes invalid", RequiresDashboardAfterInvalidPanel),
     ("emits a distinct stable replacement without a dashboard", EmitsDistinctStableReplacement),
     ("rejects observations that arrive out of order", RejectsOutOfOrderObservations),
+    ("recognizes the three-section dashboard", RecognizesDashboard),
+    ("recognizes a full-screen call", RecognizesFullScreenCall),
+    ("rejects an unexpected resolution", RejectsUnexpectedResolution),
+    ("rejects a narrow green banner from another screen", RejectsNarrowGreenBanner),
+    ("rejects an incomplete two-band layout", RejectsIncompleteLayout),
+    ("rejects a substantially occluded panel", RejectsOccludedPanel),
+    ("tolerates a moderate variation of the panel green", ToleratesGreenVariation),
 };
 
 var failures = new List<string>();
@@ -110,6 +119,73 @@ static void RejectsOutOfOrderObservations()
         "Out-of-order observations must fail fast.");
 }
 
+static void RecognizesDashboard()
+{
+    var recognition = TestLayoutRecognizer().Recognize(
+        SyntheticFrame((25, 5, 0.90), (52, 5, 0.90), (79, 5, 0.90)));
+
+    Equal(PanelMode.Dashboard, recognition.Mode, "The three-section layout was not recognized.");
+    Equal(3, recognition.GreenBands.Count, "The dashboard must expose three structural bands.");
+    Equal(LayoutRejectionReason.None, recognition.RejectionReason, "A valid panel cannot be rejected.");
+}
+
+static void RecognizesFullScreenCall()
+{
+    var recognition = TestLayoutRecognizer().Recognize(
+        SyntheticFrame((22, 6, 0.90)));
+
+    Equal(PanelMode.FullScreenCall, recognition.Mode, "The full-screen call was not recognized.");
+    Equal(1, recognition.GreenBands.Count, "A full-screen call must expose one structural band.");
+}
+
+static void RejectsUnexpectedResolution()
+{
+    var frame = SolidFrame(191, 108, 245, 245, 245);
+    var recognition = TestLayoutRecognizer().Recognize(frame);
+
+    Equal(PanelMode.Invalid, recognition.Mode, "An unexpected resolution must be rejected.");
+    Equal(
+        LayoutRejectionReason.UnexpectedDimensions,
+        recognition.RejectionReason,
+        "Resolution rejection reason mismatch.");
+}
+
+static void RejectsNarrowGreenBanner()
+{
+    var recognition = TestLayoutRecognizer().Recognize(
+        SyntheticFrame((22, 6, 0.50)));
+
+    Equal(PanelMode.Invalid, recognition.Mode, "A narrow banner cannot identify the SoulMV panel.");
+    Equal(
+        LayoutRejectionReason.UnexpectedGreenBandCount,
+        recognition.RejectionReason,
+        "Narrow-banner rejection reason mismatch.");
+}
+
+static void RejectsIncompleteLayout()
+{
+    var recognition = TestLayoutRecognizer().Recognize(
+        SyntheticFrame((25, 5, 0.90), (52, 5, 0.90)));
+
+    Equal(PanelMode.Invalid, recognition.Mode, "A two-section fragment must not be accepted.");
+}
+
+static void RejectsOccludedPanel()
+{
+    var recognition = TestLayoutRecognizer().Recognize(
+        SyntheticFrame((25, 5, 0.60), (52, 5, 0.60), (79, 5, 0.60)));
+
+    Equal(PanelMode.Invalid, recognition.Mode, "A substantially occluded panel must be rejected.");
+}
+
+static void ToleratesGreenVariation()
+{
+    var recognition = TestLayoutRecognizer().Recognize(
+        SyntheticFrameWithGreen((61, 112, 46), (22, 6, 0.90)));
+
+    Equal(PanelMode.FullScreenCall, recognition.Mode, "A moderate color variation must remain recognizable.");
+}
+
 static CallDetector ArmedDetector()
 {
     var detector = new CallDetector();
@@ -145,6 +221,101 @@ static List<DetectedCall> ObserveStableCall(
 }
 
 static TimeSpan Ms(int milliseconds) => TimeSpan.FromMilliseconds(milliseconds);
+
+static PanelLayoutRecognizer TestLayoutRecognizer()
+{
+    return new PanelLayoutRecognizer(new PanelLayoutRecognizerOptions
+    {
+        RequiredWidth = 192,
+        RequiredHeight = 108,
+        MinimumBandHeightRatio = 0.02,
+    });
+}
+
+static Rgb24Frame SyntheticFrame(params (int Top, int Height, double WidthRatio)[] bands)
+{
+    return SyntheticFrameWithGreen((50, 90, 30), bands);
+}
+
+static Rgb24Frame SyntheticFrameWithGreen(
+    (byte Red, byte Green, byte Blue) green,
+    params (int Top, int Height, double WidthRatio)[] bands)
+{
+    const int width = 192;
+    const int height = 108;
+    var pixels = FilledPixels(width, height, 245, 245, 245);
+
+    foreach (var band in bands)
+    {
+        var bandWidth = (int)Math.Floor(width * band.WidthRatio);
+        var left = (width - bandWidth) / 2;
+
+        FillRectangle(
+            pixels,
+            width,
+            left,
+            band.Top,
+            bandWidth,
+            band.Height,
+            green.Red,
+            green.Green,
+            green.Blue);
+    }
+
+    return new Rgb24Frame(width, height, pixels);
+}
+
+static Rgb24Frame SolidFrame(
+    int width,
+    int height,
+    byte red,
+    byte green,
+    byte blue)
+{
+    return new Rgb24Frame(width, height, FilledPixels(width, height, red, green, blue));
+}
+
+static byte[] FilledPixels(
+    int width,
+    int height,
+    byte red,
+    byte green,
+    byte blue)
+{
+    var pixels = new byte[width * height * 3];
+
+    for (var index = 0; index < pixels.Length; index += 3)
+    {
+        pixels[index] = red;
+        pixels[index + 1] = green;
+        pixels[index + 2] = blue;
+    }
+
+    return pixels;
+}
+
+static void FillRectangle(
+    byte[] pixels,
+    int frameWidth,
+    int left,
+    int top,
+    int width,
+    int height,
+    byte red,
+    byte green,
+    byte blue)
+{
+    for (var y = top; y < top + height; y++)
+    {
+        for (var x = left; x < left + width; x++)
+        {
+            var index = ((y * frameWidth) + x) * 3;
+            pixels[index] = red;
+            pixels[index + 1] = green;
+            pixels[index + 2] = blue;
+        }
+    }
+}
 
 static void Equal<T>(T expected, T actual, string message)
     where T : notnull
