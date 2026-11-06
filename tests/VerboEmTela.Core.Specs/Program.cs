@@ -1,5 +1,6 @@
 using System.Diagnostics.CodeAnalysis;
 using VerboEmTela.Core.Detection;
+using VerboEmTela.Core.Frames;
 using VerboEmTela.Core.Imaging;
 using VerboEmTela.Core.Layout;
 using VerboEmTela.Core.Processing;
@@ -26,6 +27,10 @@ var specifications = new (string Name, Action Run)[]
     ("waits for complete text without disarming the detector", WaitsForCompleteText),
     ("disarms the frame pipeline when the layout becomes invalid", PipelineDisarmsOnInvalidLayout),
     ("detects an identical recall through the frame pipeline", PipelineDetectsIdenticalRecall),
+    ("processes a timed frame sequence in order", () => RunnerProcessesTimedSequence().GetAwaiter().GetResult()),
+    ("resets processing state after a sequence ends", () => RunnerResetsAfterSequence().GetAwaiter().GetResult()),
+    ("rejects an out-of-order frame sequence", RejectsOutOfOrderFrameSequence),
+    ("resets processing state when a sequence is cancelled", () => CancelledRunnerResetsState().GetAwaiter().GetResult()),
 };
 
 var failures = new List<string>();
@@ -302,6 +307,91 @@ static void PipelineDetectsIdenticalRecall()
     Equal(first.Destination, recall.Destination, "Recall destination mismatch.");
 }
 
+static async Task RunnerProcessesTimedSequence()
+{
+    var extractor = CompleteExtractor();
+    var processor = TestFrameProcessor(extractor);
+    var runner = new FrameProcessingRunner(processor);
+    var source = StableCallSequence();
+
+    var results = await CollectAsync(runner.RunAsync(source));
+    var calls = results
+        .Where(result => result.DetectedCall is not null)
+        .Select(result => result.DetectedCall!)
+        .ToArray();
+
+    Equal(4, results.Count, "Every source frame must produce one processing result.");
+    Equal(1, calls.Length, "The timed sequence must produce one detected call.");
+    Equal("PESSOA TESTE", calls[0].Identity, "Detected identity mismatch.");
+}
+
+static async Task RunnerResetsAfterSequence()
+{
+    var extractor = CompleteExtractor();
+    var processor = TestFrameProcessor(extractor);
+    var runner = new FrameProcessingRunner(processor);
+
+    _ = await CollectAsync(runner.RunAsync(StableCallSequence()));
+
+    var resultAfterCompletion = processor.Process(
+        SyntheticFrame((22, 6, 0.90)),
+        Ms(3_000));
+
+    Equal(
+        FrameProcessingStatus.IgnoredUntilDashboard,
+        resultAfterCompletion.Status,
+        "A completed run must not leave the processor armed.");
+}
+
+static void RejectsOutOfOrderFrameSequence()
+{
+    var callFrame = SyntheticFrame((22, 6, 0.90));
+
+    Throws<ArgumentException>(
+        () => _ = new FrameSequenceSource(new[]
+        {
+            new CapturedFrame(callFrame, Ms(1_000)),
+            new CapturedFrame(callFrame, Ms(999)),
+        }),
+        "An out-of-order frame sequence must be rejected before processing.");
+}
+
+static async Task CancelledRunnerResetsState()
+{
+    var extractor = CompleteExtractor();
+    var processor = TestFrameProcessor(extractor);
+    var runner = new FrameProcessingRunner(processor);
+    using var cancellation = new CancellationTokenSource();
+    var cancellationObserved = false;
+
+    try
+    {
+        await foreach (var result in runner.RunAsync(StableCallSequence(), cancellation.Token))
+        {
+            Equal(
+                FrameProcessingStatus.DashboardObserved,
+                result.Status,
+                "The first replay frame must be the dashboard.");
+            cancellation.Cancel();
+        }
+    }
+    catch (OperationCanceledException)
+    {
+        cancellationObserved = true;
+    }
+
+    True(cancellationObserved, "Cancellation must stop sequence processing.");
+
+    var resultAfterCancellation = processor.Process(
+        SyntheticFrame((22, 6, 0.90)),
+        Ms(3_000));
+
+    Equal(
+        FrameProcessingStatus.IgnoredUntilDashboard,
+        resultAfterCancellation.Status,
+        "Cancellation must clear the armed state.");
+}
+
 static CallDetector ArmedDetector()
 {
     var detector = new CallDetector();
@@ -360,6 +450,32 @@ static StubTextExtractor CompleteExtractor()
         "PESSOA TESTE",
         null,
         "RECEPÇÃO 1"));
+}
+
+static FrameSequenceSource StableCallSequence()
+{
+    var dashboard = DashboardFrame();
+    var call = SyntheticFrame((22, 6, 0.90));
+
+    return new FrameSequenceSource(new[]
+    {
+        new CapturedFrame(dashboard, TimeSpan.Zero),
+        new CapturedFrame(call, Ms(1_000)),
+        new CapturedFrame(call, Ms(1_300)),
+        new CapturedFrame(call, Ms(1_600)),
+    });
+}
+
+static async Task<List<T>> CollectAsync<T>(IAsyncEnumerable<T> source)
+{
+    var items = new List<T>();
+
+    await foreach (var item in source)
+    {
+        items.Add(item);
+    }
+
+    return items;
 }
 
 static Rgb24Frame DashboardFrame()
@@ -478,6 +594,14 @@ static void Equal<T>(T expected, T actual, string message)
 static void False(bool value, string message)
 {
     if (value)
+    {
+        throw new InvalidOperationException(message);
+    }
+}
+
+static void True(bool value, string message)
+{
+    if (!value)
     {
         throw new InvalidOperationException(message);
     }

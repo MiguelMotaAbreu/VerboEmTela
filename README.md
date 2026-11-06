@@ -32,6 +32,14 @@ O processador de quadros conecta essas duas partes e garante que:
 - leitura incompleta não produza ocorrência nem desarme uma chamada potencialmente válida;
 - layout inválido desarme o pipeline até um novo painel normal.
 
+A fonte de sequência e o executor assíncrono permitem reproduzir quadros temporizados sem espera artificial:
+
+- a sequência é validada antes da execução e deve estar em ordem cronológica;
+- cada quadro produz um resultado na mesma ordem;
+- somente uma execução pode usar o mesmo executor por vez;
+- conclusão, cancelamento ou falha limpam o estado do processador;
+- o tempo vem do quadro, preparando a troca futura pela captura real.
+
 ## Executar as especificações
 
 ```powershell
