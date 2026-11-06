@@ -34,6 +34,10 @@ var specifications = new (string Name, Action Run)[]
     ("resets processing state when a sequence is cancelled", () => CancelledRunnerResetsState().GetAwaiter().GetResult()),
     ("converts padded BGR pixels into packed RGB", ConvertsPaddedBgrToPackedRgb),
     ("streams screen frames from an explicit region", () => StreamsScreenFrames().GetAwaiter().GetResult()),
+    ("selects the only monitor containing the panel", SelectsUniquePanelMonitor),
+    ("reports when no monitor contains the panel", ReportsNoPanelMonitor),
+    ("rejects an ambiguous panel monitor selection", RejectsAmbiguousPanelMonitors),
+    ("reports when Windows exposes no monitors", ReportsNoAvailableMonitors),
 };
 
 var failures = new List<string>();
@@ -442,6 +446,123 @@ static async Task StreamsScreenFrames()
         "Captured frame dimensions must match the configured region.");
 }
 
+static void SelectsUniquePanelMonitor()
+{
+    var primary = new DisplayMonitor(
+        @"\\.\DISPLAY1",
+        new ScreenRegion(0, 0, 192, 108),
+        isPrimary: true);
+    var panel = new DisplayMonitor(
+        @"\\.\DISPLAY2",
+        new ScreenRegion(-192, 0, 192, 108),
+        isPrimary: false);
+    var capture = new MappedScreenPixelCapture(new Dictionary<ScreenRegion, Rgb24Frame>
+    {
+        [primary.Bounds] = SolidFrame(192, 108, 30, 30, 30),
+        [panel.Bounds] = DashboardFrame(),
+    });
+    var selector = new PanelMonitorSelector(
+        new StubDisplayMonitorProvider(primary, panel),
+        capture,
+        TestLayoutRecognizer());
+
+    var result = selector.Select();
+
+    Equal(
+        PanelMonitorSelectionStatus.Selected,
+        result.Status,
+        "Exactly one recognized panel must be selected.");
+    var selectedMonitor = result.Monitor;
+    NotNull(selectedMonitor, "A successful selection must expose its monitor.");
+    Equal(panel, selectedMonitor, "The monitor containing the panel was not selected.");
+    Equal(2, result.ScannedMonitorCount, "Every available monitor must be scanned.");
+    Equal(1, result.MatchingMonitorCount, "Exactly one monitor must match.");
+    SequenceEqual(
+        new[] { primary.Bounds, panel.Bounds },
+        capture.CapturedRegions,
+        "Each monitor must be captured once in provider order.");
+}
+
+static void ReportsNoPanelMonitor()
+{
+    var first = new DisplayMonitor(
+        @"\\.\DISPLAY1",
+        new ScreenRegion(0, 0, 192, 108),
+        isPrimary: true);
+    var second = new DisplayMonitor(
+        @"\\.\DISPLAY2",
+        new ScreenRegion(192, 0, 192, 108),
+        isPrimary: false);
+    var capture = new MappedScreenPixelCapture(new Dictionary<ScreenRegion, Rgb24Frame>
+    {
+        [first.Bounds] = SolidFrame(192, 108, 30, 30, 30),
+        [second.Bounds] = SolidFrame(192, 108, 245, 245, 245),
+    });
+    var selector = new PanelMonitorSelector(
+        new StubDisplayMonitorProvider(first, second),
+        capture,
+        TestLayoutRecognizer());
+
+    var result = selector.Select();
+
+    Equal(
+        PanelMonitorSelectionStatus.NoPanelFound,
+        result.Status,
+        "An unrecognized desktop must not be selected.");
+    True(result.Monitor is null, "A failed selection must not expose a monitor.");
+    Equal(2, result.ScannedMonitorCount, "Every available monitor must be scanned.");
+    Equal(0, result.MatchingMonitorCount, "No monitor should match.");
+}
+
+static void RejectsAmbiguousPanelMonitors()
+{
+    var first = new DisplayMonitor(
+        @"\\.\DISPLAY1",
+        new ScreenRegion(0, 0, 192, 108),
+        isPrimary: true);
+    var second = new DisplayMonitor(
+        @"\\.\DISPLAY2",
+        new ScreenRegion(-192, 0, 192, 108),
+        isPrimary: false);
+    var capture = new MappedScreenPixelCapture(new Dictionary<ScreenRegion, Rgb24Frame>
+    {
+        [first.Bounds] = DashboardFrame(),
+        [second.Bounds] = SyntheticFrame((22, 6, 0.90)),
+    });
+    var selector = new PanelMonitorSelector(
+        new StubDisplayMonitorProvider(first, second),
+        capture,
+        TestLayoutRecognizer());
+
+    var result = selector.Select();
+
+    Equal(
+        PanelMonitorSelectionStatus.MultiplePanelsFound,
+        result.Status,
+        "Multiple recognized panels must make the selection ambiguous.");
+    True(result.Monitor is null, "An ambiguous selection must not choose a monitor.");
+    Equal(2, result.MatchingMonitorCount, "Both recognized panels must be reported.");
+}
+
+static void ReportsNoAvailableMonitors()
+{
+    var capture = new MappedScreenPixelCapture(
+        new Dictionary<ScreenRegion, Rgb24Frame>());
+    var selector = new PanelMonitorSelector(
+        new StubDisplayMonitorProvider(),
+        capture,
+        TestLayoutRecognizer());
+
+    var result = selector.Select();
+
+    Equal(
+        PanelMonitorSelectionStatus.NoMonitorsAvailable,
+        result.Status,
+        "The absence of monitors must be explicit.");
+    Equal(0, result.ScannedMonitorCount, "No monitor should be scanned.");
+    Equal(0, capture.InvocationCount, "Screen capture must not run without monitors.");
+}
+
 static CallDetector ArmedDetector()
 {
     var detector = new CallDetector();
@@ -739,5 +860,45 @@ sealed class StubScreenPixelCapture : IScreenPixelCapture
         var pixels = new byte[checked(region.Width * region.Height * 3)];
         Array.Fill(pixels, (byte)245);
         return new Rgb24Frame(region.Width, region.Height, pixels);
+    }
+}
+
+sealed class StubDisplayMonitorProvider : IDisplayMonitorProvider
+{
+    private readonly IReadOnlyList<DisplayMonitor> _monitors;
+
+    public StubDisplayMonitorProvider(params DisplayMonitor[] monitors)
+    {
+        _monitors = monitors;
+    }
+
+    public IReadOnlyList<DisplayMonitor> GetMonitors() => _monitors;
+}
+
+sealed class MappedScreenPixelCapture : IScreenPixelCapture
+{
+    private readonly IReadOnlyDictionary<ScreenRegion, Rgb24Frame> _frames;
+
+    public MappedScreenPixelCapture(
+        IReadOnlyDictionary<ScreenRegion, Rgb24Frame> frames)
+    {
+        _frames = frames;
+    }
+
+    public int InvocationCount => CapturedRegions.Count;
+
+    public List<ScreenRegion> CapturedRegions { get; } = new();
+
+    public Rgb24Frame Capture(ScreenRegion region)
+    {
+        CapturedRegions.Add(region);
+
+        if (!_frames.TryGetValue(region, out var frame))
+        {
+            throw new InvalidOperationException(
+                $"No synthetic frame was configured for {region}.");
+        }
+
+        return frame;
     }
 }

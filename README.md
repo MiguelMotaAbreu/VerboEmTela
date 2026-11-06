@@ -48,6 +48,14 @@ O adaptador Windows adiciona uma primeira captura real de região de tela:
 - não grava imagens nem mantém histórico de quadros;
 - usa GDI/`BitBlt` como prova mínima sem dependências externas.
 
+A seleção inicial de monitor também é baseada na aparência do painel:
+
+- enumera os monitores informados pelo Windows, incluindo posição e dimensão;
+- captura um único quadro de cada monitor e aplica o reconhecedor de layout;
+- seleciona somente quando exatamente um monitor contém um painel válido;
+- zero ou múltiplos candidatos retornam estados de erro, sem escolha silenciosa;
+- não retém os quadros usados durante a seleção.
+
 O adaptador GDI é provisório. A versão candidata à produção continuará prevendo Desktop Duplication/DXGI, atrás do mesmo `IFrameSource`, após comparação de desempenho e confiabilidade.
 
 ## Executar as especificações
