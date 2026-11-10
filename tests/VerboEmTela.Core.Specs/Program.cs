@@ -60,6 +60,7 @@ var specifications = new (string Name, Action Run)[]
     ("applies character rules for each OCR field", AppliesOcrFieldCharacterRules),
     ("does not expose rejected OCR field text", DoesNotExposeRejectedOcrFieldText),
     ("reads the synthetic OCR field matrix with packaged Portuguese profiles", ReadsSyntheticOcrMatrixWithPackagedProfiles),
+    ("extracts one associated synthetic call with packaged OCR profiles", ExtractsAssociatedSyntheticCallWithPackagedOcrProfiles),
     ("rejects OCR text touching the crop boundary", RejectsOcrTextTouchingCropBoundary),
     ("validates the pinned OCR component inventory", ValidatesOcrComponentInventory),
     ("streams screen frames from an explicit region", () => StreamsScreenFrames().GetAwaiter().GetResult()),
@@ -1037,6 +1038,63 @@ static void RejectsOcrTextTouchingCropBoundary()
     True(normalized.Text is null, "Rejected clipped OCR text must not escape validation.");
 }
 
+static void ExtractsAssociatedSyntheticCallWithPackagedOcrProfiles()
+{
+    const int frameWidth = 1_440;
+    const int frameHeight = 430;
+    var layout = new CallRegionLayout(
+        sector: new FrameRegion(0, 0, 760, 120),
+        name: new FrameRegion(0, 120, 920, 190),
+        password: new FrameRegion(920, 120, 520, 120),
+        destination: new FrameRegion(0, 310, 600, 120));
+    var cases = SyntheticOcrMatrix.Create().ToDictionary(
+        testCase => testCase.Id,
+        StringComparer.Ordinal);
+    var pixels = FilledPixels(
+        frameWidth,
+        frameHeight,
+        red: 255,
+        green: 255,
+        blue: 255);
+
+    BlitLuminanceRegion(
+        pixels,
+        frameWidth,
+        layout.Sector,
+        RenderSyntheticText(cases["OCR-001"]));
+    BlitLuminanceRegion(
+        pixels,
+        frameWidth,
+        layout.Name,
+        RenderSyntheticText(cases["OCR-003"]));
+    BlitLuminanceRegion(
+        pixels,
+        frameWidth,
+        layout.Password,
+        RenderSyntheticText(cases["OCR-005"]));
+    BlitLuminanceRegion(
+        pixels,
+        frameWidth,
+        layout.Destination,
+        RenderSyntheticText(cases["OCR-009"]));
+
+    using var reader = new TesseractOcrRegionReader(
+        Path.Combine(AppContext.BaseDirectory, "tessdata"),
+        Path.Combine(AppContext.BaseDirectory, "tessdata_best"));
+    var extractor = new CallRegionTextExtractor(layout, reader);
+    var extracted = extractor.ExtractCall(new CapturedFrame(
+        new Rgb24Frame(frameWidth, frameHeight, pixels),
+        Ms(5_000)));
+
+    Equal("CLASSIFICAÇÃO", extracted.Sector!, "Associated sector OCR mismatch.");
+    Equal(
+        "PESSOA FICTÍCIA DA SILVA TESTE",
+        extracted.Name!,
+        "Associated multiline name OCR mismatch.");
+    Equal("TST0001", extracted.Password!, "Associated password OCR mismatch.");
+    Equal("GUICHÊ 03", extracted.Destination!, "Associated destination OCR mismatch.");
+}
+
 static void ValidatesOcrComponentInventory()
 {
     var inventoryPath = Path.Combine(
@@ -1147,6 +1205,36 @@ static Luminance8Frame RenderSyntheticText(SyntheticOcrCase testCase)
     }
 
     return new Luminance8Frame(width, height, luminance);
+}
+
+static void BlitLuminanceRegion(
+    byte[] destinationPixels,
+    int destinationWidth,
+    FrameRegion destinationRegion,
+    Luminance8Frame source)
+{
+    if (source.Width != destinationRegion.Width ||
+        source.Height != destinationRegion.Height)
+    {
+        throw new InvalidOperationException(
+            "Synthetic OCR source dimensions must match the destination region.");
+    }
+
+    var sourcePixels = source.PixelData.Span;
+
+    for (var y = 0; y < source.Height; y++)
+    {
+        for (var x = 0; x < source.Width; x++)
+        {
+            var luminance = sourcePixels[(y * source.Width) + x];
+            var destinationIndex =
+                ((((destinationRegion.Top + y) * destinationWidth) +
+                  destinationRegion.Left + x) * 3);
+            destinationPixels[destinationIndex] = luminance;
+            destinationPixels[destinationIndex + 1] = luminance;
+            destinationPixels[destinationIndex + 2] = luminance;
+        }
+    }
 }
 
 static void AssertOcrRejection(
