@@ -50,6 +50,8 @@ var specifications = new (string Name, Action Run)[]
     ("rejects invalid OCR confidence", RejectsInvalidOcrConfidence),
     ("normalizes OCR whitespace while preserving accents", NormalizesOcrWhitespaceAndAccents),
     ("rejects incomplete or unsafe OCR text", RejectsIncompleteOrUnsafeOcrText),
+    ("applies character rules for each OCR field", AppliesOcrFieldCharacterRules),
+    ("does not expose rejected OCR field text", DoesNotExposeRejectedOcrFieldText),
     ("streams screen frames from an explicit region", () => StreamsScreenFrames().GetAwaiter().GetResult()),
     ("pauses capture until explicitly resumed", () => PausesFrameCapture().GetAwaiter().GetResult()),
     ("cancels capture while paused", () => CancelsPausedFrameCapture().GetAwaiter().GetResult()),
@@ -757,6 +759,67 @@ static void RejectsIncompleteOrUnsafeOcrText()
         boundary.RejectionReason,
         "Boundary rejection reason mismatch.");
     True(boundary.Text is null, "Rejected OCR text must not escape validation.");
+}
+
+static void AppliesOcrFieldCharacterRules()
+{
+    var password = OcrTextNormalizer.Normalize(
+        OcrFieldKind.Password,
+        new OcrRegionRead("TST0001"));
+    True(password.IsAccepted, "An alphanumeric password must be accepted.");
+
+    var punctuatedPassword = OcrTextNormalizer.Normalize(
+        OcrFieldKind.Password,
+        new OcrRegionRead("TST-0001"));
+    False(punctuatedPassword.IsAccepted, "Password punctuation must be rejected.");
+    Equal(
+        OcrTextRejectionReason.InvalidCharacters,
+        punctuatedPassword.RejectionReason,
+        "Password punctuation rejection reason mismatch.");
+
+    var destination = OcrTextNormalizer.Normalize(
+        OcrFieldKind.Destination,
+        new OcrRegionRead("CONSULT. 03-A"));
+    True(destination.IsAccepted, "Destination punctuation must remain available.");
+    Equal(
+        "CONSULT. 03-A",
+        destination.Text!,
+        "Valid destination punctuation must be preserved.");
+
+    foreach (var field in Enum.GetValues<OcrFieldKind>())
+    {
+        var symbol = OcrTextNormalizer.Normalize(
+            field,
+            new OcrRegionRead("TESTE 🚨"));
+        False(symbol.IsAccepted, $"Symbols must be rejected for {field}.");
+        True(symbol.Text is null, $"Rejected {field} text must not escape validation.");
+    }
+}
+
+static void DoesNotExposeRejectedOcrFieldText()
+{
+    var reader = new RecordingOcrRegionReader(new Dictionary<OcrFieldKind, OcrRegionRead>
+    {
+        [OcrFieldKind.Sector] = new OcrRegionRead("CLASSIFICAÇÃO"),
+        [OcrFieldKind.Name] = new OcrRegionRead("PESSOA FICTÍCIA"),
+        [OcrFieldKind.Password] = new OcrRegionRead("TST-0001"),
+        [OcrFieldKind.Destination] = new OcrRegionRead("CONSULT. 03"),
+    });
+    var extractor = new CallRegionTextExtractor(
+        new CallRegionLayout(
+            sector: new FrameRegion(0, 0, 1, 1),
+            name: new FrameRegion(1, 0, 1, 1),
+            password: new FrameRegion(0, 1, 1, 1),
+            destination: new FrameRegion(1, 1, 1, 1)),
+        reader);
+
+    var extracted = extractor.ExtractCall(new CapturedFrame(
+        new Rgb24Frame(2, 2, FilledPixels(2, 2, 255, 255, 255)),
+        Ms(4_000)));
+
+    Equal("PESSOA FICTÍCIA", extracted.Name!, "Valid name text must be preserved.");
+    True(extracted.Password is null, "Rejected password text must not leave the extractor.");
+    Equal("CONSULT. 03", extracted.Destination!, "Valid destination must be preserved.");
 }
 
 static void AssertOcrRejection(

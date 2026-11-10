@@ -147,4 +147,6 @@ Um contrato de OCR por região recebe explicitamente o tipo do campo e somente s
 
 Antes das regras de chamada, o texto bruto passa por normalização Unicode Form C e espaços ou quebras de linha consecutivos viram um único espaço. Acentos, caixa e pontuação válida são preservados. Leituras vazias, com reticências, caracteres de controle/invisíveis, caractere de substituição ou texto tocando a borda do recorte são convertidas em campo ausente; nenhuma tentativa de completar ou corrigir o conteúdo é feita.
 
+A validação final considera o tipo do campo: senha aceita somente caracteres alfanuméricos, enquanto setor, nome e destino preservam pontuação textual. Categorias Unicode de símbolos, como emoji, moeda e operadores matemáticos, são rejeitadas em todos os campos. Uma leitura rejeitada sai do extrator como campo ausente e, portanto, não pode formar uma ocorrência.
+
 Consulte [plan.md](plan.md) para o plano completo e os critérios de validação.

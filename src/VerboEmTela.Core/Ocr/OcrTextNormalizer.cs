@@ -5,6 +5,22 @@ namespace VerboEmTela.Core.Ocr;
 
 public static class OcrTextNormalizer
 {
+    public static OcrTextValidationResult Normalize(
+        OcrFieldKind field,
+        OcrRegionRead read)
+    {
+        var normalized = Normalize(read);
+
+        if (!normalized.IsAccepted)
+        {
+            return normalized;
+        }
+
+        return HasAllowedCharacters(field, normalized.Text!)
+            ? normalized
+            : Rejected(OcrTextRejectionReason.InvalidCharacters);
+    }
+
     public static OcrTextValidationResult Normalize(OcrRegionRead read)
     {
         ArgumentNullException.ThrowIfNull(read);
@@ -89,6 +105,35 @@ public static class OcrTextNormalizer
             UnicodeCategory.PrivateUse or
             UnicodeCategory.OtherNotAssigned or
             UnicodeCategory.Surrogate;
+    }
+
+    private static bool HasAllowedCharacters(
+        OcrFieldKind field,
+        string value)
+    {
+        foreach (var rune in value.EnumerateRunes())
+        {
+            if (field is OcrFieldKind.Password)
+            {
+                if (!Rune.IsLetterOrDigit(rune))
+                {
+                    return false;
+                }
+
+                continue;
+            }
+
+            if (Rune.GetUnicodeCategory(rune) is
+                UnicodeCategory.MathSymbol or
+                UnicodeCategory.CurrencySymbol or
+                UnicodeCategory.ModifierSymbol or
+                UnicodeCategory.OtherSymbol)
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     private static OcrTextValidationResult Rejected(

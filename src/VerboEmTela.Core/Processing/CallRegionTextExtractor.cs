@@ -48,6 +48,6 @@ public sealed class CallRegionTextExtractor : IFrameTextExtractor
             throw new InvalidOperationException(
                 $"OCR reader returned null for field {field}.");
 
-        return OcrTextNormalizer.Normalize(read).Text;
+        return OcrTextNormalizer.Normalize(field, read).Text;
     }
 }
