@@ -2,6 +2,59 @@ namespace VerboEmTela.Windows.Capture;
 
 internal static class PixelBufferConverter
 {
+    public static byte[] Bgra32ToRgb24(
+        ReadOnlySpan<byte> source,
+        int width,
+        int height,
+        int sourceStride)
+    {
+        if (width <= 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(width));
+        }
+
+        if (height <= 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(height));
+        }
+
+        var sourceRowLength = checked(width * 4);
+        if (sourceStride < sourceRowLength)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(sourceStride),
+                "Source stride cannot be shorter than one BGRA row.");
+        }
+
+        var requiredSourceLength = checked(sourceStride * height);
+        if (source.Length < requiredSourceLength)
+        {
+            throw new ArgumentException(
+                "Source buffer is smaller than the declared image.",
+                nameof(source));
+        }
+
+        var destination = new byte[checked(width * height * 3)];
+
+        for (var y = 0; y < height; y++)
+        {
+            var sourceRow = y * sourceStride;
+            var destinationRow = y * width * 3;
+
+            for (var x = 0; x < width; x++)
+            {
+                var sourcePixel = sourceRow + (x * 4);
+                var destinationPixel = destinationRow + (x * 3);
+
+                destination[destinationPixel] = source[sourcePixel + 2];
+                destination[destinationPixel + 1] = source[sourcePixel + 1];
+                destination[destinationPixel + 2] = source[sourcePixel];
+            }
+        }
+
+        return destination;
+    }
+
     public static byte[] PaddedBgr24ToRgb24(
         ReadOnlySpan<byte> source,
         int width,

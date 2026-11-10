@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <OutputType>Exe</OutputType>
+    <AssemblyName>VerboEmTela.EvidenceProbe</AssemblyName>
+    <RootNamespace>VerboEmTela.EvidenceProbe</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../VerboEmTela.Core/VerboEmTela.Core.csproj" />
+    <ProjectReference Include="../VerboEmTela.Windows/VerboEmTela.Windows.csproj" />
+  </ItemGroup>
+</Project>

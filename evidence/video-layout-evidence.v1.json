@@ -1,0 +1,63 @@
+{
+  "schemaVersion": 1,
+  "evidenceId": "EV-001",
+  "sourceSha256": "9A8254E100860649D276AD9498A5C822A2708F004676B715E045449B8981EFCF",
+  "sampleIntervalMilliseconds": 200,
+  "sampleCount": 300,
+  "analysisPassCount": 2,
+  "maximumObservedTransitionVarianceMilliseconds": 200,
+  "observedPeakWorkingSetMiB": 198.5,
+  "framesPersisted": false,
+  "textExtracted": false,
+  "runs": [
+    {
+      "startMilliseconds": 0,
+      "endMilliseconds": 32200,
+      "sampleCount": 162,
+      "mode": "Invalid",
+      "rejectionReason": "UnexpectedGreenBandCount"
+    },
+    {
+      "startMilliseconds": 32400,
+      "endMilliseconds": 38200,
+      "sampleCount": 30,
+      "mode": "FullScreenCall",
+      "rejectionReason": "None"
+    },
+    {
+      "startMilliseconds": 38400,
+      "endMilliseconds": 41800,
+      "sampleCount": 18,
+      "mode": "Invalid",
+      "rejectionReason": "UnexpectedGreenBandCount"
+    },
+    {
+      "startMilliseconds": 42000,
+      "endMilliseconds": 47400,
+      "sampleCount": 28,
+      "mode": "FullScreenCall",
+      "rejectionReason": "None"
+    },
+    {
+      "startMilliseconds": 47600,
+      "endMilliseconds": 49400,
+      "sampleCount": 10,
+      "mode": "Invalid",
+      "rejectionReason": "UnexpectedGreenBandCount"
+    },
+    {
+      "startMilliseconds": 49600,
+      "endMilliseconds": 55600,
+      "sampleCount": 31,
+      "mode": "FullScreenCall",
+      "rejectionReason": "None"
+    },
+    {
+      "startMilliseconds": 55800,
+      "endMilliseconds": 59800,
+      "sampleCount": 21,
+      "mode": "Invalid",
+      "rejectionReason": "UnexpectedGreenBandCount"
+    }
+  ]
+}

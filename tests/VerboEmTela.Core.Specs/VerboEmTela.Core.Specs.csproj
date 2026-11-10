@@ -15,5 +15,8 @@
     <Content Include="../../evidence/video-evidence.v1.json"
              Link="Evidence/video-evidence.v1.json"
              CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="../../evidence/video-layout-evidence.v1.json"
+             Link="Evidence/video-layout-evidence.v1.json"
+             CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>

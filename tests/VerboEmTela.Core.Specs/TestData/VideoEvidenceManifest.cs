@@ -38,3 +38,41 @@ internal sealed record AudioTrackEvidence
 
     public required bool CodecIdentified { get; init; }
 }
+
+internal sealed record VideoLayoutEvidenceManifest
+{
+    public required int SchemaVersion { get; init; }
+
+    public required string EvidenceId { get; init; }
+
+    public required string SourceSha256 { get; init; }
+
+    public required int SampleIntervalMilliseconds { get; init; }
+
+    public required int SampleCount { get; init; }
+
+    public required int AnalysisPassCount { get; init; }
+
+    public required int MaximumObservedTransitionVarianceMilliseconds { get; init; }
+
+    public required double ObservedPeakWorkingSetMiB { get; init; }
+
+    public required bool FramesPersisted { get; init; }
+
+    public required bool TextExtracted { get; init; }
+
+    public required IReadOnlyList<VideoLayoutEvidenceRun> Runs { get; init; }
+}
+
+internal sealed record VideoLayoutEvidenceRun
+{
+    public required int StartMilliseconds { get; init; }
+
+    public required int EndMilliseconds { get; init; }
+
+    public required int SampleCount { get; init; }
+
+    public required string Mode { get; init; }
+
+    public required string RejectionReason { get; init; }
+}

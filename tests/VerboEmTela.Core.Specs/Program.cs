@@ -40,6 +40,7 @@ var specifications = new (string Name, Action Run)[]
     ("rejects an out-of-order frame sequence", RejectsOutOfOrderFrameSequence),
     ("resets processing state when a sequence is cancelled", () => CancelledRunnerResetsState().GetAwaiter().GetResult()),
     ("converts padded BGR pixels into packed RGB", ConvertsPaddedBgrToPackedRgb),
+    ("converts BGRA video pixels into packed RGB", ConvertsBgraVideoPixelsToPackedRgb),
     ("crops an RGB frame into independent memory", CropsFrameIntoIndependentMemory),
     ("rejects invalid frame crop regions", RejectsInvalidFrameRegions),
     ("extracts associated call regions from one captured frame", ExtractsAssociatedCallRegions),
@@ -71,6 +72,7 @@ var specifications = new (string Name, Action Run)[]
     ("contains only explicitly fictitious identities", SyntheticMatrixContainsOnlyFictitiousIdentities),
     ("processes the complete synthetic call matrix", ProcessesSyntheticCallMatrix),
     ("validates privacy-safe video evidence metadata", ValidatesVideoEvidenceMetadata),
+    ("validates privacy-safe video layout observations", ValidatesVideoLayoutEvidence),
 };
 
 var failures = new List<string>();
@@ -455,6 +457,36 @@ static void ConvertsPaddedBgrToPackedRgb()
         new byte[] { 10, 20, 30, 40, 50, 60 },
         converted,
         "BGR to RGB conversion mismatch.");
+}
+
+static void ConvertsBgraVideoPixelsToPackedRgb()
+{
+    var source = new byte[]
+    {
+        30, 20, 10, 255,
+        60, 50, 40, 128,
+        0, 0, 0, 0,
+        90, 80, 70, 255,
+        120, 110, 100, 255,
+        0, 0, 0, 0,
+    };
+
+    var converted = PixelBufferConverter.Bgra32ToRgb24(
+        source,
+        width: 2,
+        height: 2,
+        sourceStride: 12);
+
+    SequenceEqual(
+        new byte[]
+        {
+            10, 20, 30,
+            40, 50, 60,
+            70, 80, 90,
+            100, 110, 120,
+        },
+        converted,
+        "BGRA rows must become packed RGB without alpha or padding.");
 }
 
 static void CropsFrameIntoIndependentMemory()
@@ -1412,6 +1444,64 @@ static void ValidatesVideoEvidenceMetadata()
     False(
         manifest.Audio.CodecIdentified,
         "The audio codec must remain explicitly unidentified until verified.");
+}
+
+static void ValidatesVideoLayoutEvidence()
+{
+    var evidencePath = Path.Combine(
+        AppContext.BaseDirectory,
+        "Evidence",
+        "video-layout-evidence.v1.json");
+    var manifest = JsonSerializer.Deserialize<VideoLayoutEvidenceManifest>(
+        File.ReadAllText(evidencePath),
+        new JsonSerializerOptions
+        {
+            PropertyNameCaseInsensitive = true,
+            UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow,
+        });
+
+    NotNull(manifest, "The video layout evidence manifest must be readable.");
+    Equal(1, manifest.SchemaVersion, "The layout evidence schema is incompatible.");
+    Equal("EV-001", manifest.EvidenceId, "The layout evidence source changed.");
+    Equal(
+        "9A8254E100860649D276AD9498A5C822A2708F004676B715E045449B8981EFCF",
+        manifest.SourceSha256,
+        "The layout observations must remain bound to the recorded video hash.");
+    Equal(200, manifest.SampleIntervalMilliseconds, "The evidence must use the planned 5 FPS.");
+    Equal(300, manifest.SampleCount, "The one-minute evidence must contain 300 samples.");
+    Equal(2, manifest.AnalysisPassCount, "The evidence must preserve both analysis passes.");
+    Equal(
+        200,
+        manifest.MaximumObservedTransitionVarianceMilliseconds,
+        "Decoder transition uncertainty must remain explicit.");
+    True(
+        manifest.ObservedPeakWorkingSetMiB > 0 &&
+        manifest.ObservedPeakWorkingSetMiB < 1_024,
+        "The observed incremental probe must remain below the one-GiB budget.");
+    False(manifest.FramesPersisted, "Video frames must not be persisted.");
+    False(manifest.TextExtracted, "The layout probe must not extract patient text.");
+    Equal(7, manifest.Runs.Count, "The observed layout run count changed unexpectedly.");
+    Equal(
+        manifest.SampleCount,
+        manifest.Runs.Sum(run => run.SampleCount),
+        "Every sampled frame must belong to exactly one summarized run.");
+    Equal(
+        3,
+        manifest.Runs.Count(run => run.Mode == "FullScreenCall"),
+        "The evidence must preserve the three observed full-screen calls.");
+    Equal(
+        0,
+        manifest.Runs.Count(run => run.Mode == "Dashboard"),
+        "Dashboard recognition must remain an explicit unresolved limitation.");
+    True(
+        manifest.Runs
+            .Where(run => run.Mode == "Invalid")
+            .All(run => run.RejectionReason == "UnexpectedGreenBandCount"),
+        "Every invalid run must preserve its observed rejection reason.");
+    True(
+        manifest.Runs.Zip(manifest.Runs.Skip(1))
+            .All(pair => pair.First.EndMilliseconds < pair.Second.StartMilliseconds),
+        "Layout evidence runs must be chronological and non-overlapping.");
 }
 
 static CallDetector ArmedDetector()

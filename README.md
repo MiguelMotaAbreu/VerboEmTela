@@ -135,6 +135,14 @@ Todos os nomes começam com `PESSOA FICTÍCIA` e todas as senhas usam o prefixo 
 
 Os metadados técnicos e o hash da gravação fornecida estão em [evidence/README.md](evidence/README.md) e [evidence/video-evidence.v1.json](evidence/video-evidence.v1.json). O manifesto é validado pelas especificações e contém apenas duração, dimensões, taxas, identificadores técnicos, tamanho e hash. Nenhum quadro, áudio ou conteúdo do painel foi incluído no repositório.
 
+O analisador de evidência pode amostrar um vídeo local usando o decodificador multimídia do Windows e aplicar o reconhecedor de layout aos quadros mantidos somente em memória:
+
+```powershell
+dotnet run --project src/VerboEmTela.EvidenceProbe -- <video.mp4> 500
+```
+
+O segundo argumento é o intervalo entre amostras em milissegundos, de 100 a 5000. Cada quadro é classificado e liberado antes da próxima amostra. A saída contém apenas intervalos de estado visual e motivos técnicos de rejeição; o utilitário não executa OCR, não reproduz áudio e não grava quadros ou textos.
+
 ### Regiões de imagem
 
 O núcleo permite recortar uma região validada de um quadro RGB24 inteiramente em memória. Regiões vazias, negativas, com estouro numérico ou fora dos limites são rejeitadas. Cada recorte recebe um buffer independente e expõe somente memória de leitura, preparando setor, identidade e destino para pré-processamentos separados sem definir coordenadas do SoulMV antes da validação visual.

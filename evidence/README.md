@@ -22,3 +22,17 @@ Metadados coletados em 9 de novembro de 2026 pelo mecanismo nativo de propriedad
 - Nenhum quadro, nome, senha, destino ou áudio foi extraído ou versionado.
 - O caminho local e o nome original do arquivo não foram registrados no repositório.
 - Os estados visuais, a escala efetiva do Windows e a duração do som nativo ainda dependem de validação separada.
+
+### Observações de layout em memória
+
+Em 9 e 10 de novembro de 2026, a gravação identificada pelo mesmo SHA-256 foi decodificada pelo mecanismo multimídia do Windows e amostrada a cada 200 ms, correspondendo aos 5 FPS previstos no plano. Em cada passagem, as 300 amostras foram entregues uma por vez ao reconhecedor; nenhum quadro ou texto foi persistido.
+
+O resumo reproduzível está em `video-layout-evidence.v1.json`:
+
+- três intervalos foram classificados como chamada em tela cheia: aproximadamente 32,4–38,2 s, 42,0–47,4 s e 49,6–55,6 s;
+- as demais amostras foram rejeitadas por contagem inesperada de faixas verdes;
+- nenhuma amostra foi classificada como painel normal pelo reconhecedor atual.
+
+Duas passagens produziram os mesmos três intervalos e os mesmos limites, exceto pelo primeiro início, observado em 32,4 s e 32,6 s. O manifesto registra a variação máxima de 200 ms: a busca do decodificador serve para localizar estados, mas não deve ser tratada como referência temporal exata de quadro. Após a mudança para consumo incremental, o pico de memória do processo observado externamente foi de 198,5 MiB; essa medição caracteriza a ferramenta neste computador, não o orçamento final da aplicação operacional.
+
+O último item é resultado do algoritmo atual, não prova de que o vídeo não contenha o painel normal. A Etapa 2 permanece incompleta até a causa ser identificada e o reconhecedor distinguir corretamente os períodos intermediários sem criar falsos painéis.
