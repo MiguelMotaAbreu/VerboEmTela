@@ -9,7 +9,9 @@ internal sealed record SyntheticOcrCase(
     string ExpectedText,
     int Width,
     int Height,
-    double FontSize);
+    double FontSize,
+    double Left = 20,
+    double Top = 20);
 
 internal static class SyntheticOcrMatrix
 {

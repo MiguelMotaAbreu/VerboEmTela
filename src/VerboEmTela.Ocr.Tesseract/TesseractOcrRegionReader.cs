@@ -5,6 +5,8 @@ namespace VerboEmTela.Ocr.Tesseract;
 
 public sealed class TesseractOcrRegionReader : IOcrRegionReader, IDisposable
 {
+    private const int BoundarySafetyMarginPixels = 1;
+
     private readonly global::Tesseract.TesseractEngine _passwordEngine;
     private readonly global::Tesseract.TesseractEngine _linguisticEngine;
     private readonly object _sync = new();
@@ -76,7 +78,8 @@ public sealed class TesseractOcrRegionReader : IOcrRegionReader, IDisposable
 
             return new OcrRegionRead(
                 page.GetText(),
-                page.GetMeanConfidence());
+                page.GetMeanConfidence(),
+                TouchesBoundary(page, frame));
         }
     }
 
@@ -107,6 +110,28 @@ public sealed class TesseractOcrRegionReader : IOcrRegionReader, IDisposable
         return field is OcrFieldKind.Password
             ? _passwordEngine
             : _linguisticEngine;
+    }
+
+    private static bool TouchesBoundary(
+        global::Tesseract.Page page,
+        Luminance8Frame frame)
+    {
+        var rightBoundary = frame.Width - BoundarySafetyMarginPixels;
+        var bottomBoundary = frame.Height - BoundarySafetyMarginPixels;
+
+        foreach (var bounds in page.GetSegmentedRegions(
+                     global::Tesseract.PageIteratorLevel.Symbol))
+        {
+            if (bounds.Left <= BoundarySafetyMarginPixels ||
+                bounds.Top <= BoundarySafetyMarginPixels ||
+                bounds.Right >= rightBoundary ||
+                bounds.Bottom >= bottomBoundary)
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static global::Tesseract.PageSegMode PageSegmentationFor(

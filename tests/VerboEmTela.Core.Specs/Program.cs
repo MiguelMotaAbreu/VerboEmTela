@@ -60,6 +60,7 @@ var specifications = new (string Name, Action Run)[]
     ("applies character rules for each OCR field", AppliesOcrFieldCharacterRules),
     ("does not expose rejected OCR field text", DoesNotExposeRejectedOcrFieldText),
     ("reads the synthetic OCR field matrix with packaged Portuguese profiles", ReadsSyntheticOcrMatrixWithPackagedProfiles),
+    ("rejects OCR text touching the crop boundary", RejectsOcrTextTouchingCropBoundary),
     ("validates the pinned OCR component inventory", ValidatesOcrComponentInventory),
     ("streams screen frames from an explicit region", () => StreamsScreenFrames().GetAwaiter().GetResult()),
     ("pauses capture until explicitly resumed", () => PausesFrameCapture().GetAwaiter().GetResult()),
@@ -991,6 +992,9 @@ static void ReadsSyntheticOcrMatrixWithPackagedProfiles()
         True(
             read.Confidence is >= 0 and <= 1,
             $"{testCase.Id} confidence must remain a normalized auxiliary signal.");
+        False(
+            read.TouchesBoundary,
+            $"{testCase.Id} must not be classified as touching the crop boundary.");
     }
 
     Equal(
@@ -1000,6 +1004,37 @@ static void ReadsSyntheticOcrMatrixWithPackagedProfiles()
     True(
         exactMatches == matrix.Count,
         $"Every synthetic OCR case must match exactly; actual: {exactMatches} of {matrix.Count}.");
+}
+
+static void RejectsOcrTextTouchingCropBoundary()
+{
+    using var reader = new TesseractOcrRegionReader(
+        Path.Combine(AppContext.BaseDirectory, "tessdata"),
+        Path.Combine(AppContext.BaseDirectory, "tessdata_best"));
+    var clippedDestination = new SyntheticOcrCase(
+        "OCR-BOUNDARY-001",
+        OcrFieldKind.Destination,
+        "CONSULTÓRIO 03",
+        "CONSULTÓRIO 03",
+        720,
+        120,
+        58,
+        Left: -12);
+
+    var read = reader.Read(
+        clippedDestination.Field,
+        RenderSyntheticText(clippedDestination));
+    var normalized = OcrTextNormalizer.Normalize(
+        clippedDestination.Field,
+        read);
+
+    True(read.TouchesBoundary, "Clipped OCR text must report contact with the crop boundary.");
+    False(normalized.IsAccepted, "Clipped OCR text must not pass deterministic validation.");
+    Equal(
+        OcrTextRejectionReason.TouchesBoundary,
+        normalized.RejectionReason,
+        "Clipped OCR rejection reason mismatch.");
+    True(normalized.Text is null, "Rejected clipped OCR text must not escape validation.");
 }
 
 static void ValidatesOcrComponentInventory()
@@ -1091,7 +1126,7 @@ static Luminance8Frame RenderSyntheticText(SyntheticOcrCase testCase)
             testCase.FontSize,
             System.Windows.Media.Brushes.Black,
             1);
-        drawing.DrawText(formatted, new System.Windows.Point(20, 20));
+        drawing.DrawText(formatted, new System.Windows.Point(testCase.Left, testCase.Top));
     }
 
     var bitmap = new System.Windows.Media.Imaging.RenderTargetBitmap(
