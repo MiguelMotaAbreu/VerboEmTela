@@ -81,9 +81,9 @@ public sealed class TesseractOcrRegionReader : IOcrRegionReader, IDisposable
         return field switch
         {
             OcrFieldKind.Name => global::Tesseract.PageSegMode.SingleBlock,
-            OcrFieldKind.Password => global::Tesseract.PageSegMode.SingleWord,
-            OcrFieldKind.Sector or OcrFieldKind.Destination =>
-                global::Tesseract.PageSegMode.SingleLine,
+            OcrFieldKind.Password => global::Tesseract.PageSegMode.SingleLine,
+            OcrFieldKind.Sector => global::Tesseract.PageSegMode.SingleLine,
+            OcrFieldKind.Destination => global::Tesseract.PageSegMode.SingleLine,
             _ => throw new ArgumentOutOfRangeException(
                 nameof(field),
                 field,

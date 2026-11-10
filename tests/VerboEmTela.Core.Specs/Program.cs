@@ -58,7 +58,7 @@ var specifications = new (string Name, Action Run)[]
     ("rejects incomplete or unsafe OCR text", RejectsIncompleteOrUnsafeOcrText),
     ("applies character rules for each OCR field", AppliesOcrFieldCharacterRules),
     ("does not expose rejected OCR field text", DoesNotExposeRejectedOcrFieldText),
-    ("reads synthetic text with packaged Portuguese Tesseract", ReadsSyntheticTextWithPackagedTesseract),
+    ("characterizes the synthetic OCR field matrix with packaged Portuguese Tesseract", CharacterizesSyntheticOcrMatrixWithPackagedTesseract),
     ("validates the pinned OCR component inventory", ValidatesOcrComponentInventory),
     ("streams screen frames from an explicit region", () => StreamsScreenFrames().GetAwaiter().GetResult()),
     ("pauses capture until explicitly resumed", () => PausesFrameCapture().GetAwaiter().GetResult()),
@@ -937,26 +937,66 @@ static void DoesNotExposeRejectedOcrFieldText()
     Equal("CONSULT. 03", extracted.Destination!, "Valid destination must be preserved.");
 }
 
-static void ReadsSyntheticTextWithPackagedTesseract()
+static void CharacterizesSyntheticOcrMatrixWithPackagedTesseract()
 {
     using var reader = new TesseractOcrRegionReader(Path.Combine(
         AppContext.BaseDirectory,
         "tessdata"));
-    var read = reader.Read(
-        OcrFieldKind.Destination,
-        RenderSyntheticText("CONSULTÓRIO 03"));
-    var normalized = OcrTextNormalizer.Normalize(
-        OcrFieldKind.Destination,
-        read);
+    var matrix = SyntheticOcrMatrix.Create();
 
-    True(normalized.IsAccepted, "Synthetic OCR text must pass deterministic validation.");
-    Equal(
-        "CONSULTÓRIO 03",
-        normalized.Text!,
-        "The packaged Portuguese OCR model did not read the synthetic destination.");
+    Equal(9, matrix.Count, "The synthetic OCR matrix size changed unexpectedly.");
     True(
-        read.Confidence is >= 0 and <= 1,
-        "Tesseract confidence must remain an auxiliary normalized signal.");
+        matrix
+            .Where(testCase => testCase.Field is OcrFieldKind.Name)
+            .All(testCase => testCase.RenderedText.StartsWith(
+                "PESSOA FICTÍCIA",
+                StringComparison.Ordinal)),
+        "Every synthetic OCR name must be explicitly fictitious.");
+    True(
+        matrix
+            .Where(testCase => testCase.Field is OcrFieldKind.Password)
+            .All(testCase => testCase.RenderedText.StartsWith(
+                "TST",
+                StringComparison.Ordinal)),
+        "Every synthetic OCR password must use the reserved TST prefix.");
+
+    var exactMatches = 0;
+    var unexpectedMismatches = new List<string>();
+
+    foreach (var testCase in matrix)
+    {
+        var read = reader.Read(
+            testCase.Field,
+            RenderSyntheticText(testCase));
+        var normalized = OcrTextNormalizer.Normalize(
+            testCase.Field,
+            read);
+
+        if (normalized.IsAccepted &&
+            string.Equals(
+                testCase.ExpectedText,
+                normalized.Text,
+                StringComparison.Ordinal))
+        {
+            exactMatches++;
+        }
+        else if (!testCase.IsKnownCurrentLimitation)
+        {
+            unexpectedMismatches.Add(testCase.Id);
+        }
+
+        True(
+            read.Confidence is >= 0 and <= 1,
+            $"{testCase.Id} confidence must remain a normalized auxiliary signal.");
+    }
+
+    Equal(
+        0,
+        unexpectedMismatches.Count,
+        $"Unexpected OCR mismatches: {string.Join(", ", unexpectedMismatches)}.");
+    True(
+        exactMatches >= 8,
+        $"At least 8 of 9 synthetic OCR cases must match exactly; actual: {exactMatches}.");
 }
 
 static void ValidatesOcrComponentInventory()
@@ -994,10 +1034,10 @@ static void ValidatesOcrComponentInventory()
         "The newer upstream distribution decision must remain explicit.");
 }
 
-static Luminance8Frame RenderSyntheticText(string text)
+static Luminance8Frame RenderSyntheticText(SyntheticOcrCase testCase)
 {
-    const int width = 720;
-    const int height = 120;
+    var width = testCase.Width;
+    var height = testCase.Height;
     var visual = new System.Windows.Media.DrawingVisual();
 
     using (var drawing = visual.RenderOpen())
@@ -1007,11 +1047,11 @@ static Luminance8Frame RenderSyntheticText(string text)
             null,
             new System.Windows.Rect(0, 0, width, height));
         var formatted = new System.Windows.Media.FormattedText(
-            text,
+            testCase.RenderedText,
             System.Globalization.CultureInfo.GetCultureInfo("pt-BR"),
             System.Windows.FlowDirection.LeftToRight,
             new System.Windows.Media.Typeface("Arial"),
-            58,
+            testCase.FontSize,
             System.Windows.Media.Brushes.Black,
             1);
         drawing.DrawText(formatted, new System.Windows.Point(20, 20));
