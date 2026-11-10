@@ -62,6 +62,7 @@ var specifications = new (string Name, Action Run)[]
     ("reads the synthetic OCR field matrix with packaged Portuguese profiles", ReadsSyntheticOcrMatrixWithPackagedProfiles),
     ("extracts one associated synthetic call with packaged OCR profiles", ExtractsAssociatedSyntheticCallWithPackagedOcrProfiles),
     ("emits one stable call from packaged OCR profiles", EmitsStableCallFromPackagedOcrProfiles),
+    ("resets packaged OCR stability across a mixed transition", ResetsPackagedOcrStabilityAcrossMixedTransition),
     ("rejects OCR text touching the crop boundary", RejectsOcrTextTouchingCropBoundary),
     ("validates the pinned OCR component inventory", ValidatesOcrComponentInventory),
     ("streams screen frames from an explicit region", () => StreamsScreenFrames().GetAwaiter().GetResult()),
@@ -1095,6 +1096,69 @@ static void EmitsStableCallFromPackagedOcrProfiles()
     True(persistent.DetectedCall is null, "Persistent OCR content produced a duplicate call.");
 }
 
+static void ResetsPackagedOcrStabilityAcrossMixedTransition()
+{
+    const string secondName = "PESSOA FICTÍCIA TESTE B";
+    const string secondDestination = "GUICHÊ 04";
+    var firstCall = AssociatedSyntheticCallFixture();
+    var mixedTransition = AssociatedSyntheticCallFixture(
+        name: secondName);
+    var secondCall = AssociatedSyntheticCallFixture(
+        name: secondName,
+        destination: secondDestination);
+    var layoutRecognizer = new FixedPanelLayoutRecognizer(PanelMode.Dashboard);
+
+    using var reader = new TesseractOcrRegionReader(
+        Path.Combine(AppContext.BaseDirectory, "tessdata"),
+        Path.Combine(AppContext.BaseDirectory, "tessdata_best"));
+    var processor = new CallFrameProcessor(
+        layoutRecognizer,
+        new CallRegionTextExtractor(firstCall.Layout, reader));
+
+    _ = processor.Process(firstCall.Frame, TimeSpan.Zero);
+    layoutRecognizer.Mode = PanelMode.FullScreenCall;
+    var first = processor.Process(firstCall.Frame, Ms(1_000));
+    var second = processor.Process(firstCall.Frame, Ms(1_300));
+    var mixed = processor.Process(mixedTransition.Frame, Ms(1_600));
+    var replacementFirst = processor.Process(secondCall.Frame, Ms(1_900));
+    var replacementSecond = processor.Process(secondCall.Frame, Ms(2_200));
+    var replacementThird = processor.Process(secondCall.Frame, Ms(2_500));
+
+    foreach (var pending in new[]
+             {
+                 first,
+                 second,
+                 mixed,
+                 replacementFirst,
+                 replacementSecond,
+             })
+    {
+        Equal(
+            FrameProcessingStatus.CallObserved,
+            pending.Status,
+            "A transient or not-yet-stable OCR composition must remain pending.");
+        True(
+            pending.DetectedCall is null,
+            "A transient or not-yet-stable OCR composition produced a call.");
+    }
+
+    Equal(
+        FrameProcessingStatus.CallDetected,
+        replacementThird.Status,
+        "Only three coherent replacement frames may emit the new call.");
+    NotNull(
+        replacementThird.DetectedCall,
+        "The coherent replacement OCR sequence must produce a call.");
+    Equal(
+        secondName,
+        replacementThird.DetectedCall.Identity,
+        "Replacement OCR identity mismatch.");
+    Equal(
+        secondDestination,
+        replacementThird.DetectedCall.Destination,
+        "Replacement OCR destination mismatch.");
+}
+
 static void ValidatesOcrComponentInventory()
 {
     var inventoryPath = Path.Combine(
@@ -1207,7 +1271,9 @@ static Luminance8Frame RenderSyntheticText(SyntheticOcrCase testCase)
     return new Luminance8Frame(width, height, luminance);
 }
 
-static (CallRegionLayout Layout, Rgb24Frame Frame) AssociatedSyntheticCallFixture()
+static (CallRegionLayout Layout, Rgb24Frame Frame) AssociatedSyntheticCallFixture(
+    string? name = null,
+    string? destination = null)
 {
     const int frameWidth = 1_440;
     const int frameHeight = 430;
@@ -1219,6 +1285,27 @@ static (CallRegionLayout Layout, Rgb24Frame Frame) AssociatedSyntheticCallFixtur
     var cases = SyntheticOcrMatrix.Create().ToDictionary(
         testCase => testCase.Id,
         StringComparer.Ordinal);
+    var nameCase = cases["OCR-003"];
+    var destinationCase = cases["OCR-009"];
+
+    if (name is not null)
+    {
+        nameCase = nameCase with
+        {
+            RenderedText = name,
+            ExpectedText = name,
+        };
+    }
+
+    if (destination is not null)
+    {
+        destinationCase = destinationCase with
+        {
+            RenderedText = destination,
+            ExpectedText = destination,
+        };
+    }
+
     var pixels = FilledPixels(
         frameWidth,
         frameHeight,
@@ -1235,7 +1322,7 @@ static (CallRegionLayout Layout, Rgb24Frame Frame) AssociatedSyntheticCallFixtur
         pixels,
         frameWidth,
         layout.Name,
-        RenderSyntheticText(cases["OCR-003"]));
+        RenderSyntheticText(nameCase));
     BlitLuminanceRegion(
         pixels,
         frameWidth,
@@ -1245,7 +1332,7 @@ static (CallRegionLayout Layout, Rgb24Frame Frame) AssociatedSyntheticCallFixtur
         pixels,
         frameWidth,
         layout.Destination,
-        RenderSyntheticText(cases["OCR-009"]));
+        RenderSyntheticText(destinationCase));
 
     return (
         layout,
