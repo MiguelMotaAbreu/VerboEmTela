@@ -161,4 +161,8 @@ Antes das regras de chamada, o texto bruto passa por normalização Unicode Form
 
 A validação final considera o tipo do campo: senha aceita somente caracteres alfanuméricos, enquanto setor, nome e destino preservam pontuação textual. Categorias Unicode de símbolos, como emoji, moeda e operadores matemáticos, são rejeitadas em todos os campos. Uma leitura rejeitada sai do extrator como campo ausente e, portanto, não pode formar uma ocorrência.
 
+Uma primeira implementação concreta de `IOcrRegionReader` usa localmente o wrapper Tesseract 5.2.0 e o modelo oficial `tessdata_fast` para português. A imagem de luminância é codificada como BMP somente em memória; nome usa segmentação em bloco, setor e destino usam linha única, e senha usa palavra única. O modelo, a licença, o commit de origem e os hashes estão fixados em `src/VerboEmTela.Ocr.Tesseract/ocr-components.v1.json`.
+
+A restauração inicial do pacote NuGet requer internet, mas a execução do leitor não realiza chamadas de rede e usa o modelo copiado para a pasta `tessdata` da aplicação. O wrapper depende dos runtimes nativos do Visual C++ 2019; funcionou neste computador de desenvolvimento, mas essa pré-condição ainda deverá ser verificada no computador-alvo. A prova automatizada lê apenas uma imagem sintética com `CONSULTÓRIO 03`. O wrapper embute Tesseract 5.2.0 enquanto o upstream observado está em 5.5.4; portanto, a escolha para distribuição permanece pendente e nenhum resultado real do painel foi declarado como validado.
+
 Consulte [plan.md](plan.md) para o plano completo e os critérios de validação.

@@ -1,0 +1,24 @@
+{
+  "schemaVersion": 1,
+  "wrapper": {
+    "packageId": "Tesseract",
+    "version": "5.2.0",
+    "sha256": "202D82FC7C7D8384DF7DA57206D5E1F456CCDABD648C46E67CDFAA3A911D4795",
+    "source": "https://github.com/charlesw/tesseract",
+    "license": "Apache-2.0",
+    "embeddedEngineVersion": "5.2.0"
+  },
+  "languageModel": {
+    "language": "por",
+    "repository": "https://github.com/tesseract-ocr/tessdata_fast",
+    "commit": "87416418657359cb625c412a48b6e1d6d41c29bd",
+    "sizeBytes": 1982756,
+    "sha256": "C4932B937207A9514B7514D518B931A99938C02A28A5A5A553F8599ED58B7DEB",
+    "license": "Apache-2.0"
+  },
+  "upstreamComparison": {
+    "versionObserved": "5.5.4",
+    "observedOn": "2026-11-10",
+    "distributionDecision": "pending"
+  }
+}

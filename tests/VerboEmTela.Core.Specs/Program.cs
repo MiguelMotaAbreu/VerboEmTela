@@ -1,4 +1,5 @@
 using System.Diagnostics.CodeAnalysis;
+using System.IO;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using VerboEmTela.Core.Application;
@@ -9,6 +10,7 @@ using VerboEmTela.Core.Layout;
 using VerboEmTela.Core.Ocr;
 using VerboEmTela.Core.Processing;
 using VerboEmTela.Core.Specs.TestData;
+using VerboEmTela.Ocr.Tesseract;
 using VerboEmTela.Windows.Application;
 using VerboEmTela.Windows.Capture;
 using VerboEmTela.Windows.Configuration;
@@ -56,6 +58,8 @@ var specifications = new (string Name, Action Run)[]
     ("rejects incomplete or unsafe OCR text", RejectsIncompleteOrUnsafeOcrText),
     ("applies character rules for each OCR field", AppliesOcrFieldCharacterRules),
     ("does not expose rejected OCR field text", DoesNotExposeRejectedOcrFieldText),
+    ("reads synthetic text with packaged Portuguese Tesseract", ReadsSyntheticTextWithPackagedTesseract),
+    ("validates the pinned OCR component inventory", ValidatesOcrComponentInventory),
     ("streams screen frames from an explicit region", () => StreamsScreenFrames().GetAwaiter().GetResult()),
     ("pauses capture until explicitly resumed", () => PausesFrameCapture().GetAwaiter().GetResult()),
     ("cancels capture while paused", () => CancelsPausedFrameCapture().GetAwaiter().GetResult()),
@@ -931,6 +935,106 @@ static void DoesNotExposeRejectedOcrFieldText()
     Equal("PESSOA FICTÍCIA", extracted.Name!, "Valid name text must be preserved.");
     True(extracted.Password is null, "Rejected password text must not leave the extractor.");
     Equal("CONSULT. 03", extracted.Destination!, "Valid destination must be preserved.");
+}
+
+static void ReadsSyntheticTextWithPackagedTesseract()
+{
+    using var reader = new TesseractOcrRegionReader(Path.Combine(
+        AppContext.BaseDirectory,
+        "tessdata"));
+    var read = reader.Read(
+        OcrFieldKind.Destination,
+        RenderSyntheticText("CONSULTÓRIO 03"));
+    var normalized = OcrTextNormalizer.Normalize(
+        OcrFieldKind.Destination,
+        read);
+
+    True(normalized.IsAccepted, "Synthetic OCR text must pass deterministic validation.");
+    Equal(
+        "CONSULTÓRIO 03",
+        normalized.Text!,
+        "The packaged Portuguese OCR model did not read the synthetic destination.");
+    True(
+        read.Confidence is >= 0 and <= 1,
+        "Tesseract confidence must remain an auxiliary normalized signal.");
+}
+
+static void ValidatesOcrComponentInventory()
+{
+    var inventoryPath = Path.Combine(
+        AppContext.BaseDirectory,
+        "ocr-components.v1.json");
+    using var inventory = JsonDocument.Parse(File.ReadAllText(inventoryPath));
+    var root = inventory.RootElement;
+    var wrapper = root.GetProperty("wrapper");
+    var model = root.GetProperty("languageModel");
+    var upstream = root.GetProperty("upstreamComparison");
+
+    Equal(1, root.GetProperty("schemaVersion").GetInt32(), "OCR inventory schema mismatch.");
+    Equal("5.2.0", wrapper.GetProperty("version").GetString()!, "Wrapper version mismatch.");
+    Equal("Apache-2.0", wrapper.GetProperty("license").GetString()!, "Wrapper license mismatch.");
+    Equal(
+        "202D82FC7C7D8384DF7DA57206D5E1F456CCDABD648C46E67CDFAA3A911D4795",
+        wrapper.GetProperty("sha256").GetString()!,
+        "Wrapper package hash mismatch.");
+    Equal("por", model.GetProperty("language").GetString()!, "OCR language mismatch.");
+    Equal(
+        "87416418657359cb625c412a48b6e1d6d41c29bd",
+        model.GetProperty("commit").GetString()!,
+        "OCR model commit mismatch.");
+    Equal(
+        "C4932B937207A9514B7514D518B931A99938C02A28A5A5A553F8599ED58B7DEB",
+        model.GetProperty("sha256").GetString()!,
+        "OCR model hash mismatch.");
+    Equal(1_982_756L, model.GetProperty("sizeBytes").GetInt64(), "OCR model size mismatch.");
+    Equal("Apache-2.0", model.GetProperty("license").GetString()!, "OCR model license mismatch.");
+    Equal(
+        "pending",
+        upstream.GetProperty("distributionDecision").GetString()!,
+        "The newer upstream distribution decision must remain explicit.");
+}
+
+static Luminance8Frame RenderSyntheticText(string text)
+{
+    const int width = 720;
+    const int height = 120;
+    var visual = new System.Windows.Media.DrawingVisual();
+
+    using (var drawing = visual.RenderOpen())
+    {
+        drawing.DrawRectangle(
+            System.Windows.Media.Brushes.White,
+            null,
+            new System.Windows.Rect(0, 0, width, height));
+        var formatted = new System.Windows.Media.FormattedText(
+            text,
+            System.Globalization.CultureInfo.GetCultureInfo("pt-BR"),
+            System.Windows.FlowDirection.LeftToRight,
+            new System.Windows.Media.Typeface("Arial"),
+            58,
+            System.Windows.Media.Brushes.Black,
+            1);
+        drawing.DrawText(formatted, new System.Windows.Point(20, 20));
+    }
+
+    var bitmap = new System.Windows.Media.Imaging.RenderTargetBitmap(
+        width,
+        height,
+        96,
+        96,
+        System.Windows.Media.PixelFormats.Pbgra32);
+    bitmap.Render(visual);
+    var stride = width * 4;
+    var bgra = new byte[stride * height];
+    bitmap.CopyPixels(bgra, stride, 0);
+    var luminance = new byte[width * height];
+
+    for (var pixel = 0; pixel < luminance.Length; pixel++)
+    {
+        luminance[pixel] = bgra[(pixel * 4) + 2];
+    }
+
+    return new Luminance8Frame(width, height, luminance);
 }
 
 static void AssertOcrRejection(
