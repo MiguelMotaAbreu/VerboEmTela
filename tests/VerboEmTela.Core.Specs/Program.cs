@@ -39,6 +39,8 @@ var specifications = new (string Name, Action Run)[]
     ("rejects an out-of-order frame sequence", RejectsOutOfOrderFrameSequence),
     ("resets processing state when a sequence is cancelled", () => CancelledRunnerResetsState().GetAwaiter().GetResult()),
     ("converts padded BGR pixels into packed RGB", ConvertsPaddedBgrToPackedRgb),
+    ("crops an RGB frame into independent memory", CropsFrameIntoIndependentMemory),
+    ("rejects invalid frame crop regions", RejectsInvalidFrameRegions),
     ("streams screen frames from an explicit region", () => StreamsScreenFrames().GetAwaiter().GetResult()),
     ("pauses capture until explicitly resumed", () => PausesFrameCapture().GetAwaiter().GetResult()),
     ("cancels capture while paused", () => CancelsPausedFrameCapture().GetAwaiter().GetResult()),
@@ -438,6 +440,75 @@ static void ConvertsPaddedBgrToPackedRgb()
         new byte[] { 10, 20, 30, 40, 50, 60 },
         converted,
         "BGR to RGB conversion mismatch.");
+}
+
+static void CropsFrameIntoIndependentMemory()
+{
+    const int width = 4;
+    const int height = 3;
+    var sourcePixels = new byte[width * height * 3];
+
+    for (var y = 0; y < height; y++)
+    {
+        for (var x = 0; x < width; x++)
+        {
+            var pixel = ((y * width) + x) * 3;
+            var value = (byte)((y * 10) + x);
+            sourcePixels[pixel] = value;
+            sourcePixels[pixel + 1] = (byte)(value + 100);
+            sourcePixels[pixel + 2] = (byte)(value + 200);
+        }
+    }
+
+    var frame = new Rgb24Frame(width, height, sourcePixels);
+    var cropped = frame.Crop(new FrameRegion(left: 1, top: 1, width: 2, height: 2));
+    var expected = new byte[]
+    {
+        11, 111, 211,
+        12, 112, 212,
+        21, 121, 221,
+        22, 122, 222,
+    };
+
+    Equal(2, cropped.Width, "The cropped width is incorrect.");
+    Equal(2, cropped.Height, "The cropped height is incorrect.");
+    SequenceEqual(expected, cropped.PixelData.ToArray(), "The cropped pixels are incorrect.");
+
+    Array.Fill(sourcePixels, (byte)0);
+    SequenceEqual(
+        expected,
+        cropped.PixelData.ToArray(),
+        "A crop must not retain the source frame buffer.");
+}
+
+static void RejectsInvalidFrameRegions()
+{
+    var frame = SolidFrame(4, 3, 10, 20, 30);
+
+    Throws<ArgumentOutOfRangeException>(
+        () => new FrameRegion(-1, 0, 1, 1),
+        "A negative left coordinate must be rejected.");
+    Throws<ArgumentOutOfRangeException>(
+        () => new FrameRegion(0, -1, 1, 1),
+        "A negative top coordinate must be rejected.");
+    Throws<ArgumentOutOfRangeException>(
+        () => new FrameRegion(0, 0, 0, 1),
+        "A zero-width region must be rejected.");
+    Throws<ArgumentOutOfRangeException>(
+        () => new FrameRegion(0, 0, 1, 0),
+        "A zero-height region must be rejected.");
+    Throws<OverflowException>(
+        () => new FrameRegion(int.MaxValue, 0, 1, 1),
+        "A region whose right edge overflows must be rejected.");
+    Throws<ArgumentException>(
+        () => frame.Crop(default),
+        "A default empty region must be rejected.");
+    Throws<ArgumentException>(
+        () => frame.Crop(new FrameRegion(3, 0, 2, 1)),
+        "A region beyond the right edge must be rejected.");
+    Throws<ArgumentException>(
+        () => frame.Crop(new FrameRegion(0, 2, 1, 2)),
+        "A region beyond the bottom edge must be rejected.");
 }
 
 static async Task StreamsScreenFrames()
