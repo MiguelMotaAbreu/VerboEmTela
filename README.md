@@ -139,4 +139,6 @@ Os metadados técnicos e o hash da gravação fornecida estão em [evidence/READ
 
 O núcleo permite recortar uma região validada de um quadro RGB24 inteiramente em memória. Regiões vazias, negativas, com estouro numérico ou fora dos limites são rejeitadas. Cada recorte recebe um buffer independente e expõe somente memória de leitura, preparando setor, identidade e destino para pré-processamentos separados sem definir coordenadas do SoulMV antes da validação visual.
 
+Um extrator de regiões agrupa setor, nome, senha e destino a partir do mesmo `CapturedFrame`, preservando um único timestamp. O layout é validado integralmente antes dos recortes; se qualquer região estiver fora do quadro, o lote inteiro é rejeitado. Isso cria uma fronteira explícita contra a associação de identidade e destino provenientes de quadros diferentes.
+
 Consulte [plan.md](plan.md) para o plano completo e os critérios de validação.

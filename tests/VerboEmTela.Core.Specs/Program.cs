@@ -41,6 +41,8 @@ var specifications = new (string Name, Action Run)[]
     ("converts padded BGR pixels into packed RGB", ConvertsPaddedBgrToPackedRgb),
     ("crops an RGB frame into independent memory", CropsFrameIntoIndependentMemory),
     ("rejects invalid frame crop regions", RejectsInvalidFrameRegions),
+    ("extracts associated call regions from one captured frame", ExtractsAssociatedCallRegions),
+    ("rejects a call region layout outside the frame", RejectsCallRegionLayoutOutsideFrame),
     ("streams screen frames from an explicit region", () => StreamsScreenFrames().GetAwaiter().GetResult()),
     ("pauses capture until explicitly resumed", () => PausesFrameCapture().GetAwaiter().GetResult()),
     ("cancels capture while paused", () => CancelsPausedFrameCapture().GetAwaiter().GetResult()),
@@ -509,6 +511,71 @@ static void RejectsInvalidFrameRegions()
     Throws<ArgumentException>(
         () => frame.Crop(new FrameRegion(0, 2, 1, 2)),
         "A region beyond the bottom edge must be rejected.");
+}
+
+static void ExtractsAssociatedCallRegions()
+{
+    const int width = 8;
+    const int height = 4;
+    var pixels = FilledPixels(width, height, 245, 245, 245);
+    FillRectangle(pixels, width, 0, 0, 4, 2, 200, 10, 10);
+    FillRectangle(pixels, width, 4, 0, 4, 2, 10, 200, 10);
+    FillRectangle(pixels, width, 0, 2, 4, 2, 10, 10, 200);
+    FillRectangle(pixels, width, 4, 2, 4, 2, 200, 200, 10);
+    var capturedFrame = new CapturedFrame(
+        new Rgb24Frame(width, height, pixels),
+        Ms(1_234));
+    var extractor = new CallFrameRegionExtractor(new CallRegionLayout(
+        sector: new FrameRegion(0, 0, 4, 2),
+        name: new FrameRegion(4, 0, 4, 2),
+        password: new FrameRegion(0, 2, 4, 2),
+        destination: new FrameRegion(4, 2, 4, 2)));
+
+    var regions = extractor.Extract(capturedFrame);
+
+    Equal(Ms(1_234), regions.ObservedAt, "The source frame timestamp must be preserved.");
+    SequenceEqual(
+        FilledPixels(4, 2, 200, 10, 10),
+        regions.Sector.PixelData.ToArray(),
+        "The sector region came from the wrong area.");
+    SequenceEqual(
+        FilledPixels(4, 2, 10, 200, 10),
+        regions.Name.PixelData.ToArray(),
+        "The name region came from the wrong area.");
+    SequenceEqual(
+        FilledPixels(4, 2, 10, 10, 200),
+        regions.Password.PixelData.ToArray(),
+        "The password region came from the wrong area.");
+    SequenceEqual(
+        FilledPixels(4, 2, 200, 200, 10),
+        regions.Destination.PixelData.ToArray(),
+        "The destination region came from the wrong area.");
+}
+
+static void RejectsCallRegionLayoutOutsideFrame()
+{
+    var validRegion = new FrameRegion(0, 0, 1, 1);
+
+    Throws<ArgumentException>(
+        () => new CallRegionLayout(
+            default,
+            validRegion,
+            validRegion,
+            validRegion),
+        "A default unconfigured call region must be rejected.");
+
+    var extractor = new CallFrameRegionExtractor(new CallRegionLayout(
+        validRegion,
+        validRegion,
+        validRegion,
+        new FrameRegion(3, 2, 2, 1)));
+    var capturedFrame = new CapturedFrame(
+        SolidFrame(4, 3, 245, 245, 245),
+        TimeSpan.Zero);
+
+    Throws<ArgumentException>(
+        () => extractor.Extract(capturedFrame),
+        "A call region outside the captured frame must reject the whole batch.");
 }
 
 static async Task StreamsScreenFrames()

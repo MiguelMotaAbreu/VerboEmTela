@@ -38,6 +38,16 @@ public sealed class Rgb24Frame
 
     internal ReadOnlySpan<byte> Pixels => _pixels.Span;
 
+    public bool Contains(FrameRegion region)
+    {
+        return region.Width > 0 &&
+               region.Height > 0 &&
+               region.Left >= 0 &&
+               region.Top >= 0 &&
+               region.Right <= Width &&
+               region.Bottom <= Height;
+    }
+
     public Rgb24Frame Crop(FrameRegion region)
     {
         if (region.Width <= 0 || region.Height <= 0)
@@ -47,10 +57,7 @@ public sealed class Rgb24Frame
                 nameof(region));
         }
 
-        if (region.Left < 0 ||
-            region.Top < 0 ||
-            region.Right > Width ||
-            region.Bottom > Height)
+        if (!Contains(region))
         {
             throw new ArgumentException(
                 "Frame region must be fully contained in the source frame.",
