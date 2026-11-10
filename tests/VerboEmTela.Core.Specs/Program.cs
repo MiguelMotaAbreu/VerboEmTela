@@ -43,6 +43,8 @@ var specifications = new (string Name, Action Run)[]
     ("rejects invalid frame crop regions", RejectsInvalidFrameRegions),
     ("extracts associated call regions from one captured frame", ExtractsAssociatedCallRegions),
     ("rejects a call region layout outside the frame", RejectsCallRegionLayoutOutsideFrame),
+    ("converts RGB colors to deterministic luminance", ConvertsRgbToDeterministicLuminance),
+    ("prepares associated call regions as luminance", PreparesAssociatedLuminanceRegions),
     ("streams screen frames from an explicit region", () => StreamsScreenFrames().GetAwaiter().GetResult()),
     ("pauses capture until explicitly resumed", () => PausesFrameCapture().GetAwaiter().GetResult()),
     ("cancels capture while paused", () => CancelsPausedFrameCapture().GetAwaiter().GetResult()),
@@ -576,6 +578,72 @@ static void RejectsCallRegionLayoutOutsideFrame()
     Throws<ArgumentException>(
         () => extractor.Extract(capturedFrame),
         "A call region outside the captured frame must reject the whole batch.");
+}
+
+static void ConvertsRgbToDeterministicLuminance()
+{
+    var frame = new Rgb24Frame(
+        width: 5,
+        height: 1,
+        new byte[]
+        {
+            0, 0, 0,
+            255, 255, 255,
+            255, 0, 0,
+            0, 255, 0,
+            0, 0, 255,
+        });
+
+    var luminance = Rgb24LuminanceConverter.Convert(frame);
+
+    Equal(5, luminance.Width, "The luminance width was not preserved.");
+    Equal(1, luminance.Height, "The luminance height was not preserved.");
+    SequenceEqual(
+        new byte[] { 0, 255, 77, 149, 29 },
+        luminance.PixelData.ToArray(),
+        "RGB colors were converted with unexpected luminance weights.");
+    Throws<ArgumentException>(
+        () => new Luminance8Frame(2, 2, new byte[3]),
+        "A luminance frame with incomplete pixels must be rejected.");
+}
+
+static void PreparesAssociatedLuminanceRegions()
+{
+    const int width = 4;
+    const int height = 4;
+    var pixels = FilledPixels(width, height, 0, 0, 0);
+    FillRectangle(pixels, width, 0, 0, 2, 2, 255, 0, 0);
+    FillRectangle(pixels, width, 2, 0, 2, 2, 0, 255, 0);
+    FillRectangle(pixels, width, 0, 2, 2, 2, 0, 0, 255);
+    FillRectangle(pixels, width, 2, 2, 2, 2, 255, 255, 255);
+    var regions = new CallFrameRegionExtractor(new CallRegionLayout(
+        sector: new FrameRegion(0, 0, 2, 2),
+        name: new FrameRegion(2, 0, 2, 2),
+        password: new FrameRegion(0, 2, 2, 2),
+        destination: new FrameRegion(2, 2, 2, 2)))
+        .Extract(new CapturedFrame(
+            new Rgb24Frame(width, height, pixels),
+            Ms(2_345)));
+
+    var prepared = new CallRegionLuminancePreprocessor().Prepare(regions);
+
+    Equal(Ms(2_345), prepared.ObservedAt, "Preprocessing must preserve the timestamp.");
+    SequenceEqual(
+        new byte[] { 77, 77, 77, 77 },
+        prepared.Sector.PixelData.ToArray(),
+        "The sector luminance came from the wrong region.");
+    SequenceEqual(
+        new byte[] { 149, 149, 149, 149 },
+        prepared.Name.PixelData.ToArray(),
+        "The name luminance came from the wrong region.");
+    SequenceEqual(
+        new byte[] { 29, 29, 29, 29 },
+        prepared.Password.PixelData.ToArray(),
+        "The password luminance came from the wrong region.");
+    SequenceEqual(
+        new byte[] { 255, 255, 255, 255 },
+        prepared.Destination.PixelData.ToArray(),
+        "The destination luminance came from the wrong region.");
 }
 
 static async Task StreamsScreenFrames()

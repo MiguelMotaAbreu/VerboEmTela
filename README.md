@@ -141,4 +141,6 @@ O núcleo permite recortar uma região validada de um quadro RGB24 inteiramente 
 
 Um extrator de regiões agrupa setor, nome, senha e destino a partir do mesmo `CapturedFrame`, preservando um único timestamp. O layout é validado integralmente antes dos recortes; se qualquer região estiver fora do quadro, o lote inteiro é rejeitado. Isso cria uma fronteira explícita contra a associação de identidade e destino provenientes de quadros diferentes.
 
+Os quatro recortes podem ser preparados conjuntamente como luminância de 8 bits, reduzindo cada pixel RGB de três bytes para um byte e preservando dimensões, campo e timestamp. A conversão usa pesos inteiros fixos e não aplica limiar, ampliação, nitidez ou correção de conteúdo; esses ajustes só serão escolhidos depois da comparação com fixtures visuais.
+
 Consulte [plan.md](plan.md) para o plano completo e os critérios de validação.
