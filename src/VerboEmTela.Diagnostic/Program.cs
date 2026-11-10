@@ -1,6 +1,7 @@
 using System.Text;
 using VerboEmTela.Core.Application;
 using VerboEmTela.Core.Detection;
+using VerboEmTela.Core.Frames;
 using VerboEmTela.Core.Layout;
 using VerboEmTela.Windows.Application;
 using VerboEmTela.Windows.Capture;
@@ -19,7 +20,7 @@ Console.CancelKeyPress += cancelHandler;
 
 try
 {
-    return await RunAsync(args, cancellation.Token);
+    return await RunAsync(args, cancellation);
 }
 finally
 {
@@ -28,8 +29,9 @@ finally
 
 static async Task<int> RunAsync(
     string[] commandLineArguments,
-    CancellationToken cancellationToken)
+    CancellationTokenSource cancellation)
 {
+    var cancellationToken = cancellation.Token;
     var stateMachine = new ApplicationStateMachine(
         new DiagnosticTransientContentCleaner());
 
@@ -82,23 +84,51 @@ static async Task<int> RunAsync(
         Console.WriteLine(
             $"Monitorando a {configuration.FramesPerSecond:g} FPS. " +
             "Pressione Ctrl+C para encerrar.");
+        Console.WriteLine("Comandos: P = pausar, R = retomar, Q = encerrar.");
         WriteApplicationStatus(stateMachine.CompleteStartup());
 
+        var captureGate = new FrameCaptureGate();
         var frameSource = new ScreenFrameSource(
             pixelCapture,
             new ScreenFrameSourceOptions
             {
                 Region = monitor.Bounds,
                 FramesPerSecond = configuration.FramesPerSecond,
-            });
+            },
+            captureGate: captureGate);
         var monitoringRunner = new LayoutMonitoringRunner(layoutRecognizer);
+        var commandTask = ReadCommandsAsync(
+            captureGate,
+            stateMachine,
+            cancellation);
 
-        await foreach (var state in monitoringRunner
-            .RunAsync(frameSource, cancellationToken)
-            .ConfigureAwait(false))
+        try
         {
-            UpdateApplicationState(stateMachine, state);
-            Console.WriteLine(FormatState(state));
+            await foreach (var state in monitoringRunner
+                .RunAsync(frameSource, cancellationToken)
+                .ConfigureAwait(false))
+            {
+                if (stateMachine.Current.State is ApplicationState.Paused)
+                {
+                    continue;
+                }
+
+                UpdateApplicationState(stateMachine, state);
+                Console.WriteLine(FormatState(state));
+            }
+        }
+        finally
+        {
+            cancellation.Cancel();
+
+            try
+            {
+                await commandTask.ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+                when (cancellationToken.IsCancellationRequested)
+            {
+            }
         }
 
         WriteApplicationStatus(stateMachine.Stop());
@@ -129,6 +159,60 @@ static async Task<int> RunAsync(
 
         Console.Error.WriteLine($"Falha técnica: {exception.Message}");
         return 10;
+    }
+}
+
+static async Task ReadCommandsAsync(
+    FrameCaptureGate captureGate,
+    ApplicationStateMachine stateMachine,
+    CancellationTokenSource cancellation)
+{
+    while (!cancellation.IsCancellationRequested)
+    {
+        var command = await Console.In
+            .ReadLineAsync(cancellation.Token)
+            .ConfigureAwait(false);
+
+        if (command is null)
+        {
+            return;
+        }
+
+        switch (command.Trim().ToUpperInvariant())
+        {
+            case "P":
+                if (stateMachine.Current.State is ApplicationState.Paused)
+                {
+                    Console.WriteLine("O monitoramento já está pausado.");
+                    break;
+                }
+
+                WriteApplicationStatus(stateMachine.Pause());
+                captureGate.Pause();
+                break;
+
+            case "R":
+                if (stateMachine.Current.State is not ApplicationState.Paused)
+                {
+                    Console.WriteLine("O monitoramento não está pausado.");
+                    break;
+                }
+
+                WriteApplicationStatus(stateMachine.Resume());
+                captureGate.Resume();
+                break;
+
+            case "Q":
+                cancellation.Cancel();
+                return;
+
+            case "":
+                break;
+
+            default:
+                Console.WriteLine("Comando inválido. Use P, R ou Q.");
+                break;
+        }
     }
 }
 

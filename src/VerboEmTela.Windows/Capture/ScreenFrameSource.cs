@@ -8,17 +8,20 @@ public sealed class ScreenFrameSource : IFrameSource
     private readonly IScreenPixelCapture _capture;
     private readonly ScreenFrameSourceOptions _options;
     private readonly TimeProvider _timeProvider;
+    private readonly IFrameCaptureGate? _captureGate;
     private readonly TimeSpan _frameInterval;
 
     public ScreenFrameSource(
         IScreenPixelCapture capture,
         ScreenFrameSourceOptions options,
-        TimeProvider? timeProvider = null)
+        TimeProvider? timeProvider = null,
+        IFrameCaptureGate? captureGate = null)
     {
         _capture = capture ?? throw new ArgumentNullException(nameof(capture));
         _options = options ?? throw new ArgumentNullException(nameof(options));
         _frameInterval = _options.ValidateAndGetInterval();
         _timeProvider = timeProvider ?? TimeProvider.System;
+        _captureGate = captureGate;
     }
 
     public async IAsyncEnumerable<CapturedFrame> ReadFramesAsync(
@@ -28,6 +31,13 @@ public sealed class ScreenFrameSource : IFrameSource
 
         while (true)
         {
+            if (_captureGate is not null)
+            {
+                await _captureGate
+                    .WaitUntilOpenAsync(cancellationToken)
+                    .ConfigureAwait(false);
+            }
+
             cancellationToken.ThrowIfCancellationRequested();
             var iterationStartedAt = _timeProvider.GetTimestamp();
             var frame = _capture.Capture(_options.Region);

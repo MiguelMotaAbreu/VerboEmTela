@@ -72,7 +72,7 @@ Antes de iniciar, mantenha o painel em tela cheia no monitor de 1920x1080 e deix
 - captura a 5 FPS e imprime apenas mudanças entre painel normal, chamada em tela cheia e painel inválido;
 - não mostra textos do painel, não grava imagens e não cria logs;
 - recusa uma segunda instância na mesma sessão do Windows antes de capturar a tela;
-- encerra com `Ctrl+C`.
+- aceita `P` para pausar, `R` para retomar e `Q` para encerrar, sempre seguidos de `Enter`; `Ctrl+C` continua disponível.
 
 O estado da aplicação é controlado separadamente do estado visual do painel:
 
@@ -80,6 +80,7 @@ O estado da aplicação é controlado separadamente do estado visual do painel:
 - só entra em `Monitorando` após observar o painel normal;
 - uma chamada já visível durante a inicialização não conclui o armamento;
 - perder o painel durante o monitoramento retorna a `Armando` e limpa conteúdo transitório;
+- a pausa interrompe novas capturas; a retomada volta a `Armando` antes de liberar a captura;
 - pausa, retomada, erro, recuperação e encerramento também exigem limpeza;
 - transições incoerentes são recusadas pela máquina de estados.
 

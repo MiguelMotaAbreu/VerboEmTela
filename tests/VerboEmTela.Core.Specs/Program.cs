@@ -37,6 +37,8 @@ var specifications = new (string Name, Action Run)[]
     ("resets processing state when a sequence is cancelled", () => CancelledRunnerResetsState().GetAwaiter().GetResult()),
     ("converts padded BGR pixels into packed RGB", ConvertsPaddedBgrToPackedRgb),
     ("streams screen frames from an explicit region", () => StreamsScreenFrames().GetAwaiter().GetResult()),
+    ("pauses capture until explicitly resumed", () => PausesFrameCapture().GetAwaiter().GetResult()),
+    ("cancels capture while paused", () => CancelsPausedFrameCapture().GetAwaiter().GetResult()),
     ("selects the only monitor containing the panel", SelectsUniquePanelMonitor),
     ("reports when no monitor contains the panel", ReportsNoPanelMonitor),
     ("rejects an ambiguous panel monitor selection", RejectsAmbiguousPanelMonitors),
@@ -455,6 +457,71 @@ static async Task StreamsScreenFrames()
     True(
         frames.All(frame => frame.Frame.Width == 192 && frame.Frame.Height == 108),
         "Captured frame dimensions must match the configured region.");
+}
+
+static async Task PausesFrameCapture()
+{
+    var capture = new StubScreenPixelCapture();
+    var gate = new FrameCaptureGate();
+    True(gate.Pause(), "The first pause request must close the capture gate.");
+    False(gate.Pause(), "A repeated pause request must not change the gate.");
+
+    var source = new ScreenFrameSource(
+        capture,
+        new ScreenFrameSourceOptions
+        {
+            Region = new ScreenRegion(0, 0, 192, 108),
+            FramesPerSecond = 60,
+        },
+        captureGate: gate);
+    await using var frames = source.ReadFramesAsync().GetAsyncEnumerator();
+
+    var pendingFrame = frames.MoveNextAsync().AsTask();
+
+    False(pendingFrame.IsCompleted, "A paused source must wait before capturing.");
+    Equal(0, capture.InvocationCount, "A paused source must not capture a frame.");
+    True(gate.IsPaused, "The capture gate must report its paused state.");
+
+    True(gate.Resume(), "Resume must reopen the capture gate.");
+    True(await pendingFrame, "The source must emit a frame after resume.");
+    Equal(1, capture.InvocationCount, "Resume must allow exactly one pending capture.");
+    False(gate.IsPaused, "The capture gate must report its resumed state.");
+    False(gate.Resume(), "A repeated resume request must not change the gate.");
+}
+
+static async Task CancelsPausedFrameCapture()
+{
+    var capture = new StubScreenPixelCapture();
+    var gate = new FrameCaptureGate();
+    gate.Pause();
+    using var cancellation = new CancellationTokenSource();
+    var source = new ScreenFrameSource(
+        capture,
+        new ScreenFrameSourceOptions
+        {
+            Region = new ScreenRegion(0, 0, 192, 108),
+            FramesPerSecond = 60,
+        },
+        captureGate: gate);
+    await using var frames = source
+        .ReadFramesAsync(cancellation.Token)
+        .GetAsyncEnumerator();
+    var pendingFrame = frames.MoveNextAsync().AsTask();
+
+    cancellation.Cancel();
+    var cancellationObserved = false;
+
+    try
+    {
+        await pendingFrame;
+    }
+    catch (OperationCanceledException)
+    {
+        cancellationObserved = true;
+    }
+
+    True(cancellationObserved, "Cancellation must unblock a paused capture source.");
+    Equal(0, capture.InvocationCount, "Cancellation while paused must not capture a frame.");
 }
 
 static void SelectsUniquePanelMonitor()
