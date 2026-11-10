@@ -145,4 +145,6 @@ Os quatro recortes podem ser preparados conjuntamente como luminância de 8 bits
 
 Um contrato de OCR por região recebe explicitamente o tipo do campo e somente seu quadro de luminância. O extrator coordenador lê setor, nome, senha e destino do mesmo `CapturedFrame` e só então devolve o conjunto de textos brutos. A confiança opcional é validada entre zero e um, mas não é tratada como garantia nem usada para completar conteúdo. O motor concreto de OCR ainda não foi escolhido.
 
+Antes das regras de chamada, o texto bruto passa por normalização Unicode Form C e espaços ou quebras de linha consecutivos viram um único espaço. Acentos, caixa e pontuação válida são preservados. Leituras vazias, com reticências, caracteres de controle/invisíveis, caractere de substituição ou texto tocando a borda do recorte são convertidas em campo ausente; nenhuma tentativa de completar ou corrigir o conteúdo é feita.
+
 Consulte [plan.md](plan.md) para o plano completo e os critérios de validação.

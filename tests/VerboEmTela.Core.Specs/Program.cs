@@ -48,6 +48,8 @@ var specifications = new (string Name, Action Run)[]
     ("prepares associated call regions as luminance", PreparesAssociatedLuminanceRegions),
     ("reads each OCR field from its associated region", ReadsEachOcrFieldFromAssociatedRegion),
     ("rejects invalid OCR confidence", RejectsInvalidOcrConfidence),
+    ("normalizes OCR whitespace while preserving accents", NormalizesOcrWhitespaceAndAccents),
+    ("rejects incomplete or unsafe OCR text", RejectsIncompleteOrUnsafeOcrText),
     ("streams screen frames from an explicit region", () => StreamsScreenFrames().GetAwaiter().GetResult()),
     ("pauses capture until explicitly resumed", () => PausesFrameCapture().GetAwaiter().GetResult()),
     ("cancels capture while paused", () => CancelsPausedFrameCapture().GetAwaiter().GetResult()),
@@ -665,7 +667,7 @@ static void ReadsEachOcrFieldFromAssociatedRegion()
     var reader = new RecordingOcrRegionReader(new Dictionary<OcrFieldKind, OcrRegionRead>
     {
         [OcrFieldKind.Sector] = new OcrRegionRead("CLASSIFICAÇÃO", 0.91),
-        [OcrFieldKind.Name] = new OcrRegionRead("PESSOA FICTÍCIA TESTE", 0.88),
+        [OcrFieldKind.Name] = new OcrRegionRead("  PESSOA FICTÍCIA\r\nTESTE  ", 0.88),
         [OcrFieldKind.Password] = new OcrRegionRead("TST0001", 0.94),
         [OcrFieldKind.Destination] = new OcrRegionRead("CONSULT. 03", 0.89),
     });
@@ -711,6 +713,61 @@ static void RejectsInvalidOcrConfidence()
     Throws<ArgumentOutOfRangeException>(
         () => new OcrRegionRead("texto", double.NaN),
         "NaN OCR confidence must be rejected.");
+}
+
+static void NormalizesOcrWhitespaceAndAccents()
+{
+    var result = OcrTextNormalizer.Normalize(new OcrRegionRead(
+        "  PESSOA\r\nFICTI\u0301CIA\t TESTE  ",
+        confidence: 0.01));
+
+    True(result.IsAccepted, "Valid low-confidence text must remain eligible for validation.");
+    Equal(
+        OcrTextRejectionReason.None,
+        result.RejectionReason,
+        "Valid text must not have a rejection reason.");
+    Equal(
+        "PESSOA FICTÍCIA TESTE",
+        result.Text!,
+        "Whitespace must collapse and decomposed accents must use Unicode Form C.");
+
+    var abbreviation = OcrTextNormalizer.Normalize(
+        new OcrRegionRead("CONSULT. 03"));
+    True(abbreviation.IsAccepted, "A single abbreviation period must not be treated as ellipsis.");
+    Equal("CONSULT. 03", abbreviation.Text!, "Valid punctuation must be preserved.");
+}
+
+static void RejectsIncompleteOrUnsafeOcrText()
+{
+    AssertOcrRejection(null, OcrTextRejectionReason.Missing);
+    AssertOcrRejection("  \r\n\t  ", OcrTextRejectionReason.Missing);
+    AssertOcrRejection("PESSOA TESTE...", OcrTextRejectionReason.Ellipsis);
+    AssertOcrRejection("PESSOA TESTE…", OcrTextRejectionReason.Ellipsis);
+    AssertOcrRejection("PESSOA\u0001TESTE", OcrTextRejectionReason.InvalidCharacters);
+    AssertOcrRejection("PESSOA\u200BTESTE", OcrTextRejectionReason.InvalidCharacters);
+    AssertOcrRejection("PESSOA\uFFFDTESTE", OcrTextRejectionReason.InvalidCharacters);
+
+    var boundary = OcrTextNormalizer.Normalize(new OcrRegionRead(
+        "PESSOA TESTE",
+        confidence: 0.99,
+        touchesBoundary: true));
+    False(boundary.IsAccepted, "Text touching a crop boundary must be rejected.");
+    Equal(
+        OcrTextRejectionReason.TouchesBoundary,
+        boundary.RejectionReason,
+        "Boundary rejection reason mismatch.");
+    True(boundary.Text is null, "Rejected OCR text must not escape validation.");
+}
+
+static void AssertOcrRejection(
+    string? text,
+    OcrTextRejectionReason expectedReason)
+{
+    var result = OcrTextNormalizer.Normalize(new OcrRegionRead(text));
+
+    False(result.IsAccepted, $"OCR text must be rejected as {expectedReason}.");
+    Equal(expectedReason, result.RejectionReason, "OCR rejection reason mismatch.");
+    True(result.Text is null, "Rejected OCR text must not expose normalized content.");
 }
 
 static async Task StreamsScreenFrames()

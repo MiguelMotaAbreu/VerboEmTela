@@ -2,7 +2,10 @@ namespace VerboEmTela.Core.Ocr;
 
 public sealed record OcrRegionRead
 {
-    public OcrRegionRead(string? text, double? confidence = null)
+    public OcrRegionRead(
+        string? text,
+        double? confidence = null,
+        bool touchesBoundary = false)
     {
         if (confidence is not null &&
             (double.IsNaN(confidence.Value) ||
@@ -17,9 +20,12 @@ public sealed record OcrRegionRead
 
         Text = text;
         Confidence = confidence;
+        TouchesBoundary = touchesBoundary;
     }
 
     public string? Text { get; }
 
     public double? Confidence { get; }
+
+    public bool TouchesBoundary { get; }
 }

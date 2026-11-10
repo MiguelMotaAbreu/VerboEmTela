@@ -26,26 +26,28 @@ public sealed class CallRegionTextExtractor : IFrameTextExtractor
         var regions = _preprocessor.Prepare(
             _regionExtractor.Extract(frame));
 
-        var sector = Read(OcrFieldKind.Sector, regions.Sector);
-        var name = Read(OcrFieldKind.Name, regions.Name);
-        var password = Read(OcrFieldKind.Password, regions.Password);
-        var destination = Read(
+        var sector = ReadText(OcrFieldKind.Sector, regions.Sector);
+        var name = ReadText(OcrFieldKind.Name, regions.Name);
+        var password = ReadText(OcrFieldKind.Password, regions.Password);
+        var destination = ReadText(
             OcrFieldKind.Destination,
             regions.Destination);
 
         return new ExtractedCallText(
-            sector.Text,
-            name.Text,
-            password.Text,
-            destination.Text);
+            sector,
+            name,
+            password,
+            destination);
     }
 
-    private OcrRegionRead Read(
+    private string? ReadText(
         OcrFieldKind field,
         Luminance8Frame frame)
     {
-        return _reader.Read(field, frame) ??
+        var read = _reader.Read(field, frame) ??
             throw new InvalidOperationException(
                 $"OCR reader returned null for field {field}.");
+
+        return OcrTextNormalizer.Normalize(read).Text;
     }
 }
