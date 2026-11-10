@@ -1,4 +1,5 @@
 using VerboEmTela.Core.Detection;
+using VerboEmTela.Core.Frames;
 using VerboEmTela.Core.Imaging;
 using VerboEmTela.Core.Layout;
 
@@ -45,7 +46,8 @@ public sealed class CallFrameProcessor
             return Result(layout, FrameProcessingStatus.IgnoredUntilDashboard);
         }
 
-        var extraction = _textExtractor.ExtractCall(frame);
+        var extraction = _textExtractor.ExtractCall(
+            new CapturedFrame(frame, observedAt));
         var sector = Clean(extraction.Sector);
         var destination = Clean(extraction.Destination);
         var name = Clean(extraction.Name);

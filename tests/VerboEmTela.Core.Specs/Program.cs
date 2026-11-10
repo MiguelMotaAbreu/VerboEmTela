@@ -6,6 +6,7 @@ using VerboEmTela.Core.Detection;
 using VerboEmTela.Core.Frames;
 using VerboEmTela.Core.Imaging;
 using VerboEmTela.Core.Layout;
+using VerboEmTela.Core.Ocr;
 using VerboEmTela.Core.Processing;
 using VerboEmTela.Core.Specs.TestData;
 using VerboEmTela.Windows.Application;
@@ -45,6 +46,8 @@ var specifications = new (string Name, Action Run)[]
     ("rejects a call region layout outside the frame", RejectsCallRegionLayoutOutsideFrame),
     ("converts RGB colors to deterministic luminance", ConvertsRgbToDeterministicLuminance),
     ("prepares associated call regions as luminance", PreparesAssociatedLuminanceRegions),
+    ("reads each OCR field from its associated region", ReadsEachOcrFieldFromAssociatedRegion),
+    ("rejects invalid OCR confidence", RejectsInvalidOcrConfidence),
     ("streams screen frames from an explicit region", () => StreamsScreenFrames().GetAwaiter().GetResult()),
     ("pauses capture until explicitly resumed", () => PausesFrameCapture().GetAwaiter().GetResult()),
     ("cancels capture while paused", () => CancelsPausedFrameCapture().GetAwaiter().GetResult()),
@@ -261,6 +264,10 @@ static void SelectsNameBeforePassword()
     NotNull(detected, "A complete stable call must be detected.");
     Equal(IdentityKind.Name, detected.IdentityKind, "Name must have priority over password.");
     Equal("PESSOA TESTE", detected.Identity, "Selected identity mismatch.");
+    Equal(
+        Ms(1_600),
+        extractor.LastObservedAt!.Value,
+        "The extractor must receive the original frame timestamp.");
 }
 
 static void UsesPasswordWhenNameIsAbsent()
@@ -644,6 +651,66 @@ static void PreparesAssociatedLuminanceRegions()
         new byte[] { 255, 255, 255, 255 },
         prepared.Destination.PixelData.ToArray(),
         "The destination luminance came from the wrong region.");
+}
+
+static void ReadsEachOcrFieldFromAssociatedRegion()
+{
+    const int width = 4;
+    const int height = 4;
+    var pixels = FilledPixels(width, height, 0, 0, 0);
+    FillRectangle(pixels, width, 0, 0, 2, 2, 255, 0, 0);
+    FillRectangle(pixels, width, 2, 0, 2, 2, 0, 255, 0);
+    FillRectangle(pixels, width, 0, 2, 2, 2, 0, 0, 255);
+    FillRectangle(pixels, width, 2, 2, 2, 2, 255, 255, 255);
+    var reader = new RecordingOcrRegionReader(new Dictionary<OcrFieldKind, OcrRegionRead>
+    {
+        [OcrFieldKind.Sector] = new OcrRegionRead("CLASSIFICAÇÃO", 0.91),
+        [OcrFieldKind.Name] = new OcrRegionRead("PESSOA FICTÍCIA TESTE", 0.88),
+        [OcrFieldKind.Password] = new OcrRegionRead("TST0001", 0.94),
+        [OcrFieldKind.Destination] = new OcrRegionRead("CONSULT. 03", 0.89),
+    });
+    var extractor = new CallRegionTextExtractor(
+        new CallRegionLayout(
+            sector: new FrameRegion(0, 0, 2, 2),
+            name: new FrameRegion(2, 0, 2, 2),
+            password: new FrameRegion(0, 2, 2, 2),
+            destination: new FrameRegion(2, 2, 2, 2)),
+        reader);
+
+    var extracted = extractor.ExtractCall(new CapturedFrame(
+        new Rgb24Frame(width, height, pixels),
+        Ms(3_456)));
+
+    Equal("CLASSIFICAÇÃO", extracted.Sector!, "The sector OCR text was not preserved.");
+    Equal("PESSOA FICTÍCIA TESTE", extracted.Name!, "The name OCR text was not preserved.");
+    Equal("TST0001", extracted.Password!, "The password OCR text was not preserved.");
+    Equal("CONSULT. 03", extracted.Destination!, "The destination OCR text was not preserved.");
+    Equal(4, reader.Invocations.Count, "Every OCR field must be read exactly once.");
+    Equal(OcrFieldKind.Sector, reader.Invocations[0].Field, "Sector OCR order mismatch.");
+    Equal((byte)77, reader.Invocations[0].FirstPixel, "Sector received the wrong region.");
+    Equal(OcrFieldKind.Name, reader.Invocations[1].Field, "Name OCR order mismatch.");
+    Equal((byte)149, reader.Invocations[1].FirstPixel, "Name received the wrong region.");
+    Equal(OcrFieldKind.Password, reader.Invocations[2].Field, "Password OCR order mismatch.");
+    Equal((byte)29, reader.Invocations[2].FirstPixel, "Password received the wrong region.");
+    Equal(OcrFieldKind.Destination, reader.Invocations[3].Field, "Destination OCR order mismatch.");
+    Equal((byte)255, reader.Invocations[3].FirstPixel, "Destination received the wrong region.");
+}
+
+static void RejectsInvalidOcrConfidence()
+{
+    var valid = new OcrRegionRead("texto bruto", 0.85);
+
+    Equal("texto bruto", valid.Text!, "OCR text must remain unmodified.");
+    Equal(0.85, valid.Confidence!.Value, "Valid OCR confidence was not preserved.");
+    Throws<ArgumentOutOfRangeException>(
+        () => new OcrRegionRead("texto", -0.01),
+        "Negative OCR confidence must be rejected.");
+    Throws<ArgumentOutOfRangeException>(
+        () => new OcrRegionRead("texto", 1.01),
+        "OCR confidence above one must be rejected.");
+    Throws<ArgumentOutOfRangeException>(
+        () => new OcrRegionRead("texto", double.NaN),
+        "NaN OCR confidence must be rejected.");
 }
 
 static async Task StreamsScreenFrames()
@@ -1503,11 +1570,46 @@ sealed class StubTextExtractor : IFrameTextExtractor
 
     public int InvocationCount { get; private set; }
 
-    public ExtractedCallText ExtractCall(Rgb24Frame frame)
+    public TimeSpan? LastObservedAt { get; private set; }
+
+    public ExtractedCallText ExtractCall(CapturedFrame frame)
     {
         ArgumentNullException.ThrowIfNull(frame);
         InvocationCount++;
+        LastObservedAt = frame.ObservedAt;
         return Result;
+    }
+}
+
+sealed record RecordedOcrInvocation(
+    OcrFieldKind Field,
+    int Width,
+    int Height,
+    byte FirstPixel);
+
+sealed class RecordingOcrRegionReader : IOcrRegionReader
+{
+    private readonly IReadOnlyDictionary<OcrFieldKind, OcrRegionRead> _results;
+
+    public RecordingOcrRegionReader(
+        IReadOnlyDictionary<OcrFieldKind, OcrRegionRead> results)
+    {
+        _results = results;
+    }
+
+    public List<RecordedOcrInvocation> Invocations { get; } = new();
+
+    public OcrRegionRead Read(
+        OcrFieldKind field,
+        Luminance8Frame frame)
+    {
+        Invocations.Add(new RecordedOcrInvocation(
+            field,
+            frame.Width,
+            frame.Height,
+            frame.PixelData.Span[0]));
+
+        return _results[field];
     }
 }
 

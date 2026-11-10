@@ -1,8 +1,8 @@
-using VerboEmTela.Core.Imaging;
+using VerboEmTela.Core.Frames;
 
 namespace VerboEmTela.Core.Processing;
 
 public interface IFrameTextExtractor
 {
-    ExtractedCallText ExtractCall(Rgb24Frame frame);
+    ExtractedCallText ExtractCall(CapturedFrame frame);
 }

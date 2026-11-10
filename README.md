@@ -143,4 +143,6 @@ Um extrator de regiões agrupa setor, nome, senha e destino a partir do mesmo `C
 
 Os quatro recortes podem ser preparados conjuntamente como luminância de 8 bits, reduzindo cada pixel RGB de três bytes para um byte e preservando dimensões, campo e timestamp. A conversão usa pesos inteiros fixos e não aplica limiar, ampliação, nitidez ou correção de conteúdo; esses ajustes só serão escolhidos depois da comparação com fixtures visuais.
 
+Um contrato de OCR por região recebe explicitamente o tipo do campo e somente seu quadro de luminância. O extrator coordenador lê setor, nome, senha e destino do mesmo `CapturedFrame` e só então devolve o conjunto de textos brutos. A confiança opcional é validada entre zero e um, mas não é tratada como garantia nem usada para completar conteúdo. O motor concreto de OCR ainda não foi escolhido.
+
 Consulte [plan.md](plan.md) para o plano completo e os critérios de validação.
