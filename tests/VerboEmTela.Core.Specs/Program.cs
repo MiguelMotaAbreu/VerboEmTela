@@ -1554,7 +1554,7 @@ static void ValidatesVideoLayoutEvidence()
         "The layout observations must remain bound to the recorded video hash.");
     Equal(200, manifest.SampleIntervalMilliseconds, "The evidence must use the planned 5 FPS.");
     Equal(300, manifest.SampleCount, "The one-minute evidence must contain 300 samples.");
-    Equal(2, manifest.AnalysisPassCount, "The evidence must preserve both analysis passes.");
+    Equal(3, manifest.AnalysisPassCount, "The evidence must preserve all analysis passes.");
     Equal(
         200,
         manifest.MaximumObservedTransitionVarianceMilliseconds,
@@ -1565,6 +1565,13 @@ static void ValidatesVideoLayoutEvidence()
         "The observed incremental probe must remain below the one-GiB budget.");
     False(manifest.FramesPersisted, "Video frames must not be persisted.");
     False(manifest.TextExtracted, "The layout probe must not extract patient text.");
+    True(
+        manifest.SyntheticTextInjected,
+        "Structural detection must remain explicitly bound to fictitious text.");
+    Equal(
+        3,
+        manifest.StructuralDetectedCallCount,
+        "The structural pipeline must preserve all three calls in the recording.");
     Equal(9, manifest.Runs.Count, "The observed layout run count changed unexpectedly.");
     Equal(
         manifest.SampleCount,

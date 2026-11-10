@@ -1,6 +1,8 @@
 using System.Text;
 using VerboEmTela.Core.Detection;
+using VerboEmTela.Core.Frames;
 using VerboEmTela.Core.Layout;
+using VerboEmTela.Core.Processing;
 using VerboEmTela.Windows.Evidence;
 
 Console.OutputEncoding = Encoding.UTF8;
@@ -32,26 +34,48 @@ Console.CancelKeyPress += cancelHandler;
 try
 {
     var interval = TimeSpan.FromMilliseconds(intervalMilliseconds);
-    var recognizer = new PanelLayoutRecognizer();
+    var recognizer = new RecordingLayoutRecognizer(
+        new PanelLayoutRecognizer());
+    var textExtractor = new FictitiousTextExtractor();
+    var processor = new CallFrameProcessor(recognizer, textExtractor);
     var observations = new List<EvidenceObservation>();
+    var detectedAt = new List<TimeSpan>();
 
     await new WpfVideoFrameReader().ReadAtIntervalAsync(
         args[0],
         interval,
         frame =>
         {
-            var recognition = recognizer.Recognize(frame.Frame);
+            var processing = processor.Process(
+                frame.Frame,
+                frame.ObservedAt);
+            var recognition = recognizer.LastRecognition ??
+                throw new InvalidOperationException(
+                    "The layout recognizer did not expose the processed frame result.");
             observations.Add(new EvidenceObservation(
                 frame.ObservedAt,
                 recognition.Mode,
                 recognition.RejectionReason,
                 recognition.GreenBands));
+
+            if (processing.DetectedCall is not null)
+            {
+                detectedAt.Add(processing.DetectedCall.DetectedAt);
+            }
         },
         cancellation.Token);
 
     Console.WriteLine(
         $"{observations.Count} amostras processadas em memória; " +
         "nenhum quadro ou texto foi gravado.");
+    Console.WriteLine(
+        $"{detectedAt.Count} ocorrência(s) estrutural(is) detectada(s) " +
+        "com conteúdo fictício; OCR não executado.");
+
+    foreach (var timestamp in detectedAt)
+    {
+        Console.WriteLine($"- ocorrência estrutural em {Format(timestamp)}");
+    }
 
     foreach (var run in GroupRuns(observations))
     {
@@ -177,3 +201,34 @@ sealed record EvidenceRun(
     PanelMode Mode,
     LayoutRejectionReason RejectionReason,
     int SampleCount);
+
+sealed class RecordingLayoutRecognizer : IPanelLayoutRecognizer
+{
+    private readonly IPanelLayoutRecognizer _inner;
+
+    public RecordingLayoutRecognizer(IPanelLayoutRecognizer inner)
+    {
+        _inner = inner ?? throw new ArgumentNullException(nameof(inner));
+    }
+
+    public LayoutRecognition? LastRecognition { get; private set; }
+
+    public LayoutRecognition Recognize(VerboEmTela.Core.Imaging.Rgb24Frame frame)
+    {
+        LastRecognition = _inner.Recognize(frame);
+        return LastRecognition;
+    }
+}
+
+sealed class FictitiousTextExtractor : IFrameTextExtractor
+{
+    public ExtractedCallText ExtractCall(CapturedFrame frame)
+    {
+        ArgumentNullException.ThrowIfNull(frame);
+        return new ExtractedCallText(
+            "SETOR FICTÍCIO",
+            "PESSOA FICTÍCIA",
+            null,
+            "DESTINO FICTÍCIO");
+    }
+}

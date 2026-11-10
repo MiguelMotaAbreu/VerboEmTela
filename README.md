@@ -145,7 +145,7 @@ O analisador de evidência pode amostrar um vídeo local usando o decodificador 
 dotnet run --project src/VerboEmTela.EvidenceProbe -- <video.mp4> 500
 ```
 
-O segundo argumento é o intervalo entre amostras em milissegundos, de 100 a 5000. Cada quadro é classificado e liberado antes da próxima amostra. A saída contém apenas intervalos de estado visual e motivos técnicos de rejeição; o utilitário não executa OCR, não reproduz áudio e não grava quadros ou textos.
+O segundo argumento é o intervalo entre amostras em milissegundos, de 100 a 5000. Cada quadro é classificado e liberado antes da próxima amostra. A saída contém intervalos de estado visual, motivos técnicos de rejeição e ocorrências estruturais produzidas com conteúdo explicitamente fictício. O utilitário não executa OCR, não reproduz áudio e não grava quadros ou textos.
 
 ### Regiões de imagem
 

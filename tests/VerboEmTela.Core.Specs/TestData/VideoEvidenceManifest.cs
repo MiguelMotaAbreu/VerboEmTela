@@ -61,6 +61,10 @@ internal sealed record VideoLayoutEvidenceManifest
 
     public required bool TextExtracted { get; init; }
 
+    public required bool SyntheticTextInjected { get; init; }
+
+    public required int StructuralDetectedCallCount { get; init; }
+
     public required IReadOnlyList<VideoLayoutEvidenceRun> Runs { get; init; }
 }
 
