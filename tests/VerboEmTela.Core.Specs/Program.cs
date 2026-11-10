@@ -61,6 +61,7 @@ var specifications = new (string Name, Action Run)[]
     ("does not expose rejected OCR field text", DoesNotExposeRejectedOcrFieldText),
     ("reads the synthetic OCR field matrix with packaged Portuguese profiles", ReadsSyntheticOcrMatrixWithPackagedProfiles),
     ("extracts one associated synthetic call with packaged OCR profiles", ExtractsAssociatedSyntheticCallWithPackagedOcrProfiles),
+    ("emits one stable call from packaged OCR profiles", EmitsStableCallFromPackagedOcrProfiles),
     ("rejects OCR text touching the crop boundary", RejectsOcrTextTouchingCropBoundary),
     ("validates the pinned OCR component inventory", ValidatesOcrComponentInventory),
     ("streams screen frames from an explicit region", () => StreamsScreenFrames().GetAwaiter().GetResult()),
@@ -1040,50 +1041,14 @@ static void RejectsOcrTextTouchingCropBoundary()
 
 static void ExtractsAssociatedSyntheticCallWithPackagedOcrProfiles()
 {
-    const int frameWidth = 1_440;
-    const int frameHeight = 430;
-    var layout = new CallRegionLayout(
-        sector: new FrameRegion(0, 0, 760, 120),
-        name: new FrameRegion(0, 120, 920, 190),
-        password: new FrameRegion(920, 120, 520, 120),
-        destination: new FrameRegion(0, 310, 600, 120));
-    var cases = SyntheticOcrMatrix.Create().ToDictionary(
-        testCase => testCase.Id,
-        StringComparer.Ordinal);
-    var pixels = FilledPixels(
-        frameWidth,
-        frameHeight,
-        red: 255,
-        green: 255,
-        blue: 255);
-
-    BlitLuminanceRegion(
-        pixels,
-        frameWidth,
-        layout.Sector,
-        RenderSyntheticText(cases["OCR-001"]));
-    BlitLuminanceRegion(
-        pixels,
-        frameWidth,
-        layout.Name,
-        RenderSyntheticText(cases["OCR-003"]));
-    BlitLuminanceRegion(
-        pixels,
-        frameWidth,
-        layout.Password,
-        RenderSyntheticText(cases["OCR-005"]));
-    BlitLuminanceRegion(
-        pixels,
-        frameWidth,
-        layout.Destination,
-        RenderSyntheticText(cases["OCR-009"]));
+    var fixture = AssociatedSyntheticCallFixture();
 
     using var reader = new TesseractOcrRegionReader(
         Path.Combine(AppContext.BaseDirectory, "tessdata"),
         Path.Combine(AppContext.BaseDirectory, "tessdata_best"));
-    var extractor = new CallRegionTextExtractor(layout, reader);
+    var extractor = new CallRegionTextExtractor(fixture.Layout, reader);
     var extracted = extractor.ExtractCall(new CapturedFrame(
-        new Rgb24Frame(frameWidth, frameHeight, pixels),
+        fixture.Frame,
         Ms(5_000)));
 
     Equal("CLASSIFICAÇÃO", extracted.Sector!, "Associated sector OCR mismatch.");
@@ -1093,6 +1058,41 @@ static void ExtractsAssociatedSyntheticCallWithPackagedOcrProfiles()
         "Associated multiline name OCR mismatch.");
     Equal("TST0001", extracted.Password!, "Associated password OCR mismatch.");
     Equal("GUICHÊ 03", extracted.Destination!, "Associated destination OCR mismatch.");
+}
+
+static void EmitsStableCallFromPackagedOcrProfiles()
+{
+    var fixture = AssociatedSyntheticCallFixture();
+    var layoutRecognizer = new FixedPanelLayoutRecognizer(PanelMode.Dashboard);
+
+    using var reader = new TesseractOcrRegionReader(
+        Path.Combine(AppContext.BaseDirectory, "tessdata"),
+        Path.Combine(AppContext.BaseDirectory, "tessdata_best"));
+    var processor = new CallFrameProcessor(
+        layoutRecognizer,
+        new CallRegionTextExtractor(fixture.Layout, reader));
+
+    var dashboard = processor.Process(fixture.Frame, TimeSpan.Zero);
+    layoutRecognizer.Mode = PanelMode.FullScreenCall;
+    var first = processor.Process(fixture.Frame, Ms(1_000));
+    var second = processor.Process(fixture.Frame, Ms(1_300));
+    var third = processor.Process(fixture.Frame, Ms(1_600));
+    var persistent = processor.Process(fixture.Frame, Ms(1_900));
+
+    Equal(FrameProcessingStatus.DashboardObserved, dashboard.Status, "Dashboard must arm the OCR pipeline.");
+    Equal(FrameProcessingStatus.CallObserved, first.Status, "First OCR observation must start stability.");
+    Equal(FrameProcessingStatus.CallObserved, second.Status, "Second OCR observation must remain pending.");
+    Equal(FrameProcessingStatus.CallDetected, third.Status, "Third stable OCR observation must emit the call.");
+    NotNull(third.DetectedCall, "Stable packaged OCR readings must produce a detected call.");
+    Equal("CLASSIFICAÇÃO", third.DetectedCall.Sector, "Detected OCR sector mismatch.");
+    Equal(IdentityKind.Name, third.DetectedCall.IdentityKind, "Detected OCR identity kind mismatch.");
+    Equal(
+        "PESSOA FICTÍCIA DA SILVA TESTE",
+        third.DetectedCall.Identity,
+        "Detected OCR identity mismatch.");
+    Equal("GUICHÊ 03", third.DetectedCall.Destination, "Detected OCR destination mismatch.");
+    Equal(FrameProcessingStatus.CallObserved, persistent.Status, "Persistent OCR content must not emit twice.");
+    True(persistent.DetectedCall is null, "Persistent OCR content produced a duplicate call.");
 }
 
 static void ValidatesOcrComponentInventory()
@@ -1205,6 +1205,51 @@ static Luminance8Frame RenderSyntheticText(SyntheticOcrCase testCase)
     }
 
     return new Luminance8Frame(width, height, luminance);
+}
+
+static (CallRegionLayout Layout, Rgb24Frame Frame) AssociatedSyntheticCallFixture()
+{
+    const int frameWidth = 1_440;
+    const int frameHeight = 430;
+    var layout = new CallRegionLayout(
+        sector: new FrameRegion(0, 0, 760, 120),
+        name: new FrameRegion(0, 120, 920, 190),
+        password: new FrameRegion(920, 120, 520, 120),
+        destination: new FrameRegion(0, 310, 600, 120));
+    var cases = SyntheticOcrMatrix.Create().ToDictionary(
+        testCase => testCase.Id,
+        StringComparer.Ordinal);
+    var pixels = FilledPixels(
+        frameWidth,
+        frameHeight,
+        red: 255,
+        green: 255,
+        blue: 255);
+
+    BlitLuminanceRegion(
+        pixels,
+        frameWidth,
+        layout.Sector,
+        RenderSyntheticText(cases["OCR-001"]));
+    BlitLuminanceRegion(
+        pixels,
+        frameWidth,
+        layout.Name,
+        RenderSyntheticText(cases["OCR-003"]));
+    BlitLuminanceRegion(
+        pixels,
+        frameWidth,
+        layout.Password,
+        RenderSyntheticText(cases["OCR-005"]));
+    BlitLuminanceRegion(
+        pixels,
+        frameWidth,
+        layout.Destination,
+        RenderSyntheticText(cases["OCR-009"]));
+
+    return (
+        layout,
+        new Rgb24Frame(frameWidth, frameHeight, pixels));
 }
 
 static void BlitLuminanceRegion(
@@ -2210,6 +2255,28 @@ sealed class StubTextExtractor : IFrameTextExtractor
         InvocationCount++;
         LastObservedAt = frame.ObservedAt;
         return Result;
+    }
+}
+
+sealed class FixedPanelLayoutRecognizer : IPanelLayoutRecognizer
+{
+    public FixedPanelLayoutRecognizer(PanelMode mode)
+    {
+        Mode = mode;
+    }
+
+    public PanelMode Mode { get; set; }
+
+    public LayoutRecognition Recognize(Rgb24Frame frame)
+    {
+        ArgumentNullException.ThrowIfNull(frame);
+
+        return new LayoutRecognition(
+            Mode,
+            Array.Empty<HorizontalBand>(),
+            Mode is PanelMode.Invalid
+                ? LayoutRejectionReason.UnexpectedGreenBandCount
+                : LayoutRejectionReason.None);
     }
 }
 
