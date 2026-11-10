@@ -34,6 +34,8 @@ O processador de quadros conecta essas duas partes e garante que:
 - leitura incompleta não produza ocorrência nem desarme uma chamada potencialmente válida;
 - layout inválido desarme o pipeline até um novo painel normal.
 
+Para não perder uma chamada durante a animação observada na gravação, o primeiro quadro inválido abre uma transição de até 800 ms. Durante essa janela não há OCR nem aceitação de conteúdo. Se painel ou chamada válidos retornarem antes do limite, o estado armado é preservado; se a invalidez persistir ou o próximo quadro chegar depois do limite, a perda é confirmada, o detector desarma e volta a exigir painel normal.
+
 A fonte de sequência e o executor assíncrono permitem reproduzir quadros temporizados sem espera artificial:
 
 - a sequência é validada antes da execução e deve estar em ordem cronológica;

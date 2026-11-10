@@ -34,7 +34,9 @@ var specifications = new (string Name, Action Run)[]
     ("selects the name before the password from the same frame", SelectsNameBeforePassword),
     ("uses a password when a name is absent", UsesPasswordWhenNameIsAbsent),
     ("waits for complete text without disarming the detector", WaitsForCompleteText),
+    ("preserves arming across a brief invalid transition", PreservesArmingAcrossBriefInvalidTransition),
     ("disarms the frame pipeline when the layout becomes invalid", PipelineDisarmsOnInvalidLayout),
+    ("disarms before a call after a long invalid sampling gap", DisarmsBeforeCallAfterLongInvalidGap),
     ("detects an identical recall through the frame pipeline", PipelineDetectsIdenticalRecall),
     ("processes a timed frame sequence in order", () => RunnerProcessesTimedSequence().GetAwaiter().GetResult()),
     ("resets processing state after a sequence ends", () => RunnerResetsAfterSequence().GetAwaiter().GetResult()),
@@ -355,15 +357,63 @@ static void PipelineDisarmsOnInvalidLayout()
     var processor = TestFrameProcessor(extractor);
 
     processor.Process(DashboardFrame(), TimeSpan.Zero);
-    var invalid = processor.Process(SolidFrame(192, 108, 40, 40, 40), Ms(1_000));
+    var transition = processor.Process(SolidFrame(192, 108, 40, 40, 40), Ms(1_000));
+    var invalid = processor.Process(SolidFrame(192, 108, 40, 40, 40), Ms(1_800));
     var ignored = processor.Process(SyntheticFrame((22, 6, 0.90)), Ms(2_000));
 
+    Equal(
+        FrameProcessingStatus.LayoutTransitionObserved,
+        transition.Status,
+        "The first invalid frame must remain a pending transition.");
     Equal(FrameProcessingStatus.InvalidLayout, invalid.Status, "Invalid layout status mismatch.");
     Equal(
         FrameProcessingStatus.IgnoredUntilDashboard,
         ignored.Status,
         "A call after an invalid layout must wait for a dashboard.");
     Equal(0, extractor.InvocationCount, "Disarmed calls must not be extracted.");
+}
+
+static void PreservesArmingAcrossBriefInvalidTransition()
+{
+    var extractor = CompleteExtractor();
+    var processor = TestFrameProcessor(extractor);
+    var invalidFrame = SolidFrame(192, 108, 40, 40, 40);
+
+    processor.Process(DashboardFrame(), TimeSpan.Zero);
+
+    foreach (var observedAt in new[] { 1_000, 1_200, 1_400 })
+    {
+        var transition = processor.Process(invalidFrame, Ms(observedAt));
+        Equal(
+            FrameProcessingStatus.LayoutTransitionObserved,
+            transition.Status,
+            "A sub-800-ms invalid sequence must remain a transition.");
+    }
+
+    Equal(0, extractor.InvocationCount, "Transition frames must never be sent to OCR.");
+
+    var detected = ProcessStableFrameCall(processor, 1_600);
+
+    NotNull(detected, "A stable call after the observed brief transition must be detected.");
+    Equal(3, extractor.InvocationCount, "Only stable call frames may reach extraction.");
+}
+
+static void DisarmsBeforeCallAfterLongInvalidGap()
+{
+    var extractor = CompleteExtractor();
+    var processor = TestFrameProcessor(extractor);
+
+    processor.Process(DashboardFrame(), TimeSpan.Zero);
+    processor.Process(SolidFrame(192, 108, 40, 40, 40), Ms(1_000));
+    var ignored = processor.Process(
+        SyntheticFrame((22, 6, 0.90)),
+        Ms(1_800));
+
+    Equal(
+        FrameProcessingStatus.IgnoredUntilDashboard,
+        ignored.Status,
+        "A call arriving after the grace period must require a new dashboard.");
+    Equal(0, extractor.InvocationCount, "A call after confirmed loss must not reach OCR.");
 }
 
 static void PipelineDetectsIdenticalRecall()
@@ -1369,10 +1419,16 @@ static void ProcessesSyntheticCallMatrix()
         switch (testCase.Kind)
         {
             case SyntheticEventKind.InvalidScreen:
-                var invalid = processor.Process(
-                    SolidFrame(192, 108, 30, 30, 30),
+                var invalidFrame = SolidFrame(192, 108, 30, 30, 30);
+                var transition = processor.Process(
+                    invalidFrame,
                     Ms(1_000));
+                var invalid = processor.Process(invalidFrame, Ms(1_800));
                 detected = invalid.DetectedCall;
+                Equal(
+                    FrameProcessingStatus.LayoutTransitionObserved,
+                    transition.Status,
+                    $"{testCase.Id} must first enter the invalid-layout grace period.");
                 Equal(
                     FrameProcessingStatus.InvalidLayout,
                     invalid.Status,

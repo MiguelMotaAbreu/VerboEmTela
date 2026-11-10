@@ -10,16 +10,22 @@ public sealed class CallFrameProcessor
     private readonly IPanelLayoutRecognizer _layoutRecognizer;
     private readonly IFrameTextExtractor _textExtractor;
     private readonly CallDetector _callDetector;
+    private readonly CallFrameProcessorOptions _options;
     private TimeSpan? _lastFrameTime;
+    private TimeSpan? _invalidLayoutSince;
+    private bool _invalidLayoutConfirmed;
 
     public CallFrameProcessor(
         IPanelLayoutRecognizer layoutRecognizer,
         IFrameTextExtractor textExtractor,
-        CallDetector? callDetector = null)
+        CallDetector? callDetector = null,
+        CallFrameProcessorOptions? options = null)
     {
         _layoutRecognizer = layoutRecognizer ?? throw new ArgumentNullException(nameof(layoutRecognizer));
         _textExtractor = textExtractor ?? throw new ArgumentNullException(nameof(textExtractor));
         _callDetector = callDetector ?? new CallDetector();
+        _options = options ?? new CallFrameProcessorOptions();
+        _options.Validate();
     }
 
     public FrameProcessingResult Process(Rgb24Frame frame, TimeSpan observedAt)
@@ -31,9 +37,11 @@ public sealed class CallFrameProcessor
 
         if (layout.Mode is PanelMode.Invalid)
         {
-            _callDetector.Process(PanelObservation.Invalid(observedAt));
-            return Result(layout, FrameProcessingStatus.InvalidLayout);
+            return HandleInvalidLayout(layout, observedAt);
         }
+
+        ConfirmExpiredInvalidLayout(observedAt);
+        ClearInvalidLayoutTransition();
 
         if (layout.Mode is PanelMode.Dashboard)
         {
@@ -83,7 +91,47 @@ public sealed class CallFrameProcessor
     public void Reset()
     {
         _lastFrameTime = null;
+        ClearInvalidLayoutTransition();
         _callDetector.Reset();
+    }
+
+    private FrameProcessingResult HandleInvalidLayout(
+        LayoutRecognition layout,
+        TimeSpan observedAt)
+    {
+        _invalidLayoutSince ??= observedAt;
+
+        if (!_invalidLayoutConfirmed &&
+            observedAt - _invalidLayoutSince.Value >=
+                _options.InvalidLayoutGracePeriod)
+        {
+            _callDetector.Process(PanelObservation.Invalid(observedAt));
+            _invalidLayoutConfirmed = true;
+        }
+
+        return Result(
+            layout,
+            _invalidLayoutConfirmed
+                ? FrameProcessingStatus.InvalidLayout
+                : FrameProcessingStatus.LayoutTransitionObserved);
+    }
+
+    private void ConfirmExpiredInvalidLayout(TimeSpan observedAt)
+    {
+        if (!_invalidLayoutConfirmed &&
+            _invalidLayoutSince is not null &&
+            observedAt - _invalidLayoutSince.Value >=
+                _options.InvalidLayoutGracePeriod)
+        {
+            _callDetector.Process(PanelObservation.Invalid(observedAt));
+            _invalidLayoutConfirmed = true;
+        }
+    }
+
+    private void ClearInvalidLayoutTransition()
+    {
+        _invalidLayoutSince = null;
+        _invalidLayoutConfirmed = false;
     }
 
     private static FrameProcessingResult Result(
