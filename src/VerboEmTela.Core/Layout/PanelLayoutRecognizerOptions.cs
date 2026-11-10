@@ -12,7 +12,7 @@ public sealed record PanelLayoutRecognizerOptions
 
     public double MinimumBandHeightRatio { get; init; } = 0.008;
 
-    public double MaximumGapInsideBandRatio { get; init; } = 0.002;
+    public double MaximumGapInsideBandRatio { get; init; } = 0.015;
 
     public double MinimumLightPixelRatio { get; init; } = 0.45;
 

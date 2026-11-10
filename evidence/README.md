@@ -30,9 +30,10 @@ Em 9 e 10 de novembro de 2026, a gravação identificada pelo mesmo SHA-256 foi 
 O resumo reproduzível está em `video-layout-evidence.v1.json`:
 
 - três intervalos foram classificados como chamada em tela cheia: aproximadamente 32,4–38,2 s, 42,0–47,4 s e 49,6–55,6 s;
-- as demais amostras foram rejeitadas por contagem inesperada de faixas verdes;
-- nenhuma amostra foi classificada como painel normal pelo reconhecedor atual.
+- 206 das 300 amostras foram classificadas como painel normal;
+- 89 amostras foram classificadas como chamada em tela cheia;
+- cinco amostras de transição permaneceram inválidas, três antes da segunda chamada e duas depois dela.
 
-Duas passagens produziram os mesmos três intervalos e os mesmos limites, exceto pelo primeiro início, observado em 32,4 s e 32,6 s. O manifesto registra a variação máxima de 200 ms: a busca do decodificador serve para localizar estados, mas não deve ser tratada como referência temporal exata de quadro. Após a mudança para consumo incremental, o pico de memória do processo observado externamente foi de 198,5 MiB; essa medição caracteriza a ferramenta neste computador, não o orçamento final da aplicação operacional.
+Duas passagens após o ajuste produziram os mesmos três intervalos principais. Houve variação máxima de 200 ms em limites de transição, por isso a busca do decodificador serve para localizar estados, mas não deve ser tratada como referência temporal exata de quadro. Após a mudança para consumo incremental, o pico de memória do processo observado externamente foi de 198,5 MiB; essa medição caracteriza a ferramenta neste computador, não o orçamento final da aplicação operacional.
 
-O último item é resultado do algoritmo atual, não prova de que o vídeo não contenha o painel normal. A Etapa 2 permanece incompleta até a causa ser identificada e o reconhecedor distinguir corretamente os períodos intermediários sem criar falsos painéis.
+O painel real fragmenta algumas faixas verdes com lacunas internas de até 14 pixels. A tolerância foi ajustada para 1,5% da altura, equivalente a 16 pixels em 1080p, sem aproximar as três seções separadas por centenas de pixels. As cinco amostras inválidas não são convertidas em painel por aproximação. Como três delas aparecem imediatamente antes da segunda chamada, a política temporal de transição ainda precisa ser implementada para que essa chamada não seja perdida após um desarme transitório.

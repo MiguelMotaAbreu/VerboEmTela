@@ -23,6 +23,7 @@ var specifications = new (string Name, Action Run)[]
     ("emits a distinct stable replacement without a dashboard", EmitsDistinctStableReplacement),
     ("rejects observations that arrive out of order", RejectsOutOfOrderObservations),
     ("recognizes the three-section dashboard", RecognizesDashboard),
+    ("merges small internal gaps in real dashboard bands", MergesSmallInternalDashboardBandGaps),
     ("recognizes a full-screen call", RecognizesFullScreenCall),
     ("rejects an unexpected resolution", RejectsUnexpectedResolution),
     ("rejects a narrow green banner from another screen", RejectsNarrowGreenBanner),
@@ -182,6 +183,34 @@ static void RecognizesDashboard()
     Equal(PanelMode.Dashboard, recognition.Mode, "The three-section layout was not recognized.");
     Equal(3, recognition.GreenBands.Count, "The dashboard must expose three structural bands.");
     Equal(LayoutRejectionReason.None, recognition.RejectionReason, "A valid panel cannot be rejected.");
+}
+
+static void MergesSmallInternalDashboardBandGaps()
+{
+    const int width = 1920;
+    const int height = 1080;
+    var pixels = FilledPixels(width, height, 245, 245, 245);
+
+    FillCenteredGreenBand(pixels, width, top: 182, height: 47, widthRatio: 0.80);
+    FillCenteredGreenBand(pixels, width, top: 449, height: 42, widthRatio: 0.80);
+    FillCenteredGreenBand(pixels, width, top: 769, height: 16, widthRatio: 0.79);
+    FillCenteredGreenBand(pixels, width, top: 799, height: 12, widthRatio: 0.86);
+
+    var recognition = new PanelLayoutRecognizer().Recognize(
+        new Rgb24Frame(width, height, pixels));
+
+    Equal(
+        PanelMode.Dashboard,
+        recognition.Mode,
+        "A dashboard band split by the observed 14-pixel gap must remain one logical band.");
+    Equal(
+        3,
+        recognition.GreenBands.Count,
+        "Internal gaps must not create extra dashboard sections.");
+    Equal(
+        42,
+        recognition.GreenBands[2].Height,
+        "The merged band must span both green fragments and their internal gap.");
 }
 
 static void RecognizesFullScreenCall()
@@ -1480,7 +1509,7 @@ static void ValidatesVideoLayoutEvidence()
         "The observed incremental probe must remain below the one-GiB budget.");
     False(manifest.FramesPersisted, "Video frames must not be persisted.");
     False(manifest.TextExtracted, "The layout probe must not extract patient text.");
-    Equal(7, manifest.Runs.Count, "The observed layout run count changed unexpectedly.");
+    Equal(9, manifest.Runs.Count, "The observed layout run count changed unexpectedly.");
     Equal(
         manifest.SampleCount,
         manifest.Runs.Sum(run => run.SampleCount),
@@ -1490,9 +1519,14 @@ static void ValidatesVideoLayoutEvidence()
         manifest.Runs.Count(run => run.Mode == "FullScreenCall"),
         "The evidence must preserve the three observed full-screen calls.");
     Equal(
-        0,
+        4,
         manifest.Runs.Count(run => run.Mode == "Dashboard"),
-        "Dashboard recognition must remain an explicit unresolved limitation.");
+        "The evidence must preserve the four observed dashboard runs.");
+    True(
+        manifest.Runs
+            .Where(run => run.Mode is not "Invalid")
+            .Sum(run => run.SampleCount) >= 295,
+        "At least 295 of 300 evidence samples must identify a known panel mode.");
     True(
         manifest.Runs
             .Where(run => run.Mode == "Invalid")
@@ -1656,6 +1690,27 @@ static Rgb24Frame SyntheticFrameWithGreen(
     }
 
     return new Rgb24Frame(width, height, pixels);
+}
+
+static void FillCenteredGreenBand(
+    byte[] pixels,
+    int frameWidth,
+    int top,
+    int height,
+    double widthRatio)
+{
+    var bandWidth = (int)Math.Floor(frameWidth * widthRatio);
+    var left = (frameWidth - bandWidth) / 2;
+    FillRectangle(
+        pixels,
+        frameWidth,
+        left,
+        top,
+        bandWidth,
+        height,
+        red: 50,
+        green: 90,
+        blue: 30);
 }
 
 static Rgb24Frame SolidFrame(

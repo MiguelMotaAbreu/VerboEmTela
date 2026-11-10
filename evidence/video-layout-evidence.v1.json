@@ -14,8 +14,8 @@
       "startMilliseconds": 0,
       "endMilliseconds": 32200,
       "sampleCount": 162,
-      "mode": "Invalid",
-      "rejectionReason": "UnexpectedGreenBandCount"
+      "mode": "Dashboard",
+      "rejectionReason": "None"
     },
     {
       "startMilliseconds": 32400,
@@ -26,8 +26,15 @@
     },
     {
       "startMilliseconds": 38400,
+      "endMilliseconds": 41200,
+      "sampleCount": 15,
+      "mode": "Dashboard",
+      "rejectionReason": "None"
+    },
+    {
+      "startMilliseconds": 41400,
       "endMilliseconds": 41800,
-      "sampleCount": 18,
+      "sampleCount": 3,
       "mode": "Invalid",
       "rejectionReason": "UnexpectedGreenBandCount"
     },
@@ -40,10 +47,17 @@
     },
     {
       "startMilliseconds": 47600,
-      "endMilliseconds": 49400,
-      "sampleCount": 10,
+      "endMilliseconds": 47800,
+      "sampleCount": 2,
       "mode": "Invalid",
       "rejectionReason": "UnexpectedGreenBandCount"
+    },
+    {
+      "startMilliseconds": 48000,
+      "endMilliseconds": 49400,
+      "sampleCount": 8,
+      "mode": "Dashboard",
+      "rejectionReason": "None"
     },
     {
       "startMilliseconds": 49600,
@@ -56,8 +70,8 @@
       "startMilliseconds": 55800,
       "endMilliseconds": 59800,
       "sampleCount": 21,
-      "mode": "Invalid",
-      "rejectionReason": "UnexpectedGreenBandCount"
+      "mode": "Dashboard",
+      "rejectionReason": "None"
     }
   ]
 }

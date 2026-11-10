@@ -44,7 +44,8 @@ try
             observations.Add(new EvidenceObservation(
                 frame.ObservedAt,
                 recognition.Mode,
-                recognition.RejectionReason));
+                recognition.RejectionReason,
+                recognition.GreenBands));
         },
         cancellation.Token);
 
@@ -59,6 +60,8 @@ try
             $"{Describe(run.Mode, run.RejectionReason)}  " +
             $"({run.SampleCount} amostras)");
     }
+
+    WriteBandSummary(observations);
 
     return 0;
 }
@@ -135,10 +138,38 @@ static string Describe(
     };
 }
 
+static void WriteBandSummary(
+    IReadOnlyList<EvidenceObservation> observations)
+{
+    Console.WriteLine("Resumo estrutural das faixas verdes:");
+
+    foreach (var group in observations
+        .GroupBy(observation => observation.GreenBands.Count)
+        .OrderBy(group => group.Key))
+    {
+        Console.WriteLine(
+            $"- {group.Key} faixa(s): {group.Count()} amostra(s)");
+
+        for (var bandIndex = 0; bandIndex < group.Key; bandIndex++)
+        {
+            var bands = group
+                .Select(observation => observation.GreenBands[bandIndex])
+                .ToArray();
+            Console.WriteLine(
+                $"  faixa {bandIndex + 1}: " +
+                $"topo {bands.Min(band => band.Top)}–{bands.Max(band => band.Top)}, " +
+                $"altura {bands.Min(band => band.Height)}–{bands.Max(band => band.Height)}, " +
+                $"cobertura {bands.Min(band => band.AverageGreenCoverage):P1}–" +
+                $"{bands.Max(band => band.AverageGreenCoverage):P1}");
+        }
+    }
+}
+
 sealed record EvidenceObservation(
     TimeSpan ObservedAt,
     PanelMode Mode,
-    LayoutRejectionReason RejectionReason);
+    LayoutRejectionReason RejectionReason,
+    IReadOnlyList<HorizontalBand> GreenBands);
 
 sealed record EvidenceRun(
     TimeSpan Start,

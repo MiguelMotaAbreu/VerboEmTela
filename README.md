@@ -20,6 +20,8 @@ O reconhecedor estrutural também recebe um quadro RGB24 em memória e classific
 - chamada em tela cheia com uma faixa de seção;
 - tela inválida por dimensão, estrutura incompleta, banner estreito ou obstrução relevante.
 
+Faixas verdes fragmentadas por pequenas lacunas internas são reunidas antes da contagem. A tolerância padrão é de 1,5% da altura — 16 pixels em 1080p — validada contra a gravação fornecida; as separações reais entre as três áreas continuam muito maiores e não são fundidas.
+
 Os testes atuais usam imagens sintéticas sem dados pessoais. A reprodução do vídeo real, OCR, fila e voz ainda não fazem parte desta fatia.
 
 O processador de quadros conecta essas duas partes e garante que:
