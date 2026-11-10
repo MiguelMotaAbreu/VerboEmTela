@@ -1,5 +1,6 @@
 using System.Diagnostics.CodeAnalysis;
 using System.IO;
+using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using VerboEmTela.Core.Application;
@@ -58,7 +59,7 @@ var specifications = new (string Name, Action Run)[]
     ("rejects incomplete or unsafe OCR text", RejectsIncompleteOrUnsafeOcrText),
     ("applies character rules for each OCR field", AppliesOcrFieldCharacterRules),
     ("does not expose rejected OCR field text", DoesNotExposeRejectedOcrFieldText),
-    ("characterizes the synthetic OCR field matrix with packaged Portuguese Tesseract", CharacterizesSyntheticOcrMatrixWithPackagedTesseract),
+    ("reads the synthetic OCR field matrix with packaged Portuguese profiles", ReadsSyntheticOcrMatrixWithPackagedProfiles),
     ("validates the pinned OCR component inventory", ValidatesOcrComponentInventory),
     ("streams screen frames from an explicit region", () => StreamsScreenFrames().GetAwaiter().GetResult()),
     ("pauses capture until explicitly resumed", () => PausesFrameCapture().GetAwaiter().GetResult()),
@@ -937,11 +938,11 @@ static void DoesNotExposeRejectedOcrFieldText()
     Equal("CONSULT. 03", extracted.Destination!, "Valid destination must be preserved.");
 }
 
-static void CharacterizesSyntheticOcrMatrixWithPackagedTesseract()
+static void ReadsSyntheticOcrMatrixWithPackagedProfiles()
 {
-    using var reader = new TesseractOcrRegionReader(Path.Combine(
-        AppContext.BaseDirectory,
-        "tessdata"));
+    using var reader = new TesseractOcrRegionReader(
+        Path.Combine(AppContext.BaseDirectory, "tessdata"),
+        Path.Combine(AppContext.BaseDirectory, "tessdata_best"));
     var matrix = SyntheticOcrMatrix.Create();
 
     Equal(9, matrix.Count, "The synthetic OCR matrix size changed unexpectedly.");
@@ -980,9 +981,11 @@ static void CharacterizesSyntheticOcrMatrixWithPackagedTesseract()
         {
             exactMatches++;
         }
-        else if (!testCase.IsKnownCurrentLimitation)
+        else
         {
-            unexpectedMismatches.Add(testCase.Id);
+            unexpectedMismatches.Add(
+                $"{testCase.Id} expected '{testCase.ExpectedText}' " +
+                $"but read '{normalized.Text ?? "<rejected>"}'");
         }
 
         True(
@@ -995,8 +998,8 @@ static void CharacterizesSyntheticOcrMatrixWithPackagedTesseract()
         unexpectedMismatches.Count,
         $"Unexpected OCR mismatches: {string.Join(", ", unexpectedMismatches)}.");
     True(
-        exactMatches >= 8,
-        $"At least 8 of 9 synthetic OCR cases must match exactly; actual: {exactMatches}.");
+        exactMatches == matrix.Count,
+        $"Every synthetic OCR case must match exactly; actual: {exactMatches} of {matrix.Count}.");
 }
 
 static void ValidatesOcrComponentInventory()
@@ -1004,10 +1007,20 @@ static void ValidatesOcrComponentInventory()
     var inventoryPath = Path.Combine(
         AppContext.BaseDirectory,
         "ocr-components.v1.json");
+    var passwordModelPath = Path.Combine(
+        AppContext.BaseDirectory,
+        "tessdata",
+        "por.traineddata");
+    var linguisticModelPath = Path.Combine(
+        AppContext.BaseDirectory,
+        "tessdata_best",
+        "por.traineddata");
     using var inventory = JsonDocument.Parse(File.ReadAllText(inventoryPath));
     var root = inventory.RootElement;
     var wrapper = root.GetProperty("wrapper");
-    var model = root.GetProperty("languageModel");
+    var models = root.GetProperty("languageModels");
+    var passwordModel = models[0];
+    var linguisticModel = models[1];
     var upstream = root.GetProperty("upstreamComparison");
 
     Equal(1, root.GetProperty("schemaVersion").GetInt32(), "OCR inventory schema mismatch.");
@@ -1017,17 +1030,41 @@ static void ValidatesOcrComponentInventory()
         "202D82FC7C7D8384DF7DA57206D5E1F456CCDABD648C46E67CDFAA3A911D4795",
         wrapper.GetProperty("sha256").GetString()!,
         "Wrapper package hash mismatch.");
-    Equal("por", model.GetProperty("language").GetString()!, "OCR language mismatch.");
+    Equal(2, models.GetArrayLength(), "OCR model profile count mismatch.");
+    Equal("password", passwordModel.GetProperty("profile").GetString()!, "Password model profile mismatch.");
+    Equal("por", passwordModel.GetProperty("language").GetString()!, "Password OCR language mismatch.");
     Equal(
         "87416418657359cb625c412a48b6e1d6d41c29bd",
-        model.GetProperty("commit").GetString()!,
-        "OCR model commit mismatch.");
+        passwordModel.GetProperty("commit").GetString()!,
+        "Password OCR model commit mismatch.");
     Equal(
         "C4932B937207A9514B7514D518B931A99938C02A28A5A5A553F8599ED58B7DEB",
-        model.GetProperty("sha256").GetString()!,
-        "OCR model hash mismatch.");
-    Equal(1_982_756L, model.GetProperty("sizeBytes").GetInt64(), "OCR model size mismatch.");
-    Equal("Apache-2.0", model.GetProperty("license").GetString()!, "OCR model license mismatch.");
+        passwordModel.GetProperty("sha256").GetString()!,
+        "Password OCR model hash mismatch.");
+    Equal(1_982_756L, passwordModel.GetProperty("sizeBytes").GetInt64(), "Password OCR model size mismatch.");
+    Equal("Apache-2.0", passwordModel.GetProperty("license").GetString()!, "Password OCR model license mismatch.");
+    Equal(1_982_756L, new FileInfo(passwordModelPath).Length, "Packaged password OCR model size mismatch.");
+    Equal(
+        passwordModel.GetProperty("sha256").GetString()!,
+        Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(passwordModelPath))),
+        "Packaged password OCR model hash mismatch.");
+    Equal("linguistic", linguisticModel.GetProperty("profile").GetString()!, "Linguistic model profile mismatch.");
+    Equal("por", linguisticModel.GetProperty("language").GetString()!, "Linguistic OCR language mismatch.");
+    Equal(
+        "e12c65a915945e4c28e237a9b52bc4a8f39a0cec",
+        linguisticModel.GetProperty("commit").GetString()!,
+        "Linguistic OCR model commit mismatch.");
+    Equal(
+        "711DE9DBB8052067BD42F16B9119967F30BADA80D57E2EF24F65D09F531ADB04",
+        linguisticModel.GetProperty("sha256").GetString()!,
+        "Linguistic OCR model hash mismatch.");
+    Equal(8_159_939L, linguisticModel.GetProperty("sizeBytes").GetInt64(), "Linguistic OCR model size mismatch.");
+    Equal("Apache-2.0", linguisticModel.GetProperty("license").GetString()!, "Linguistic OCR model license mismatch.");
+    Equal(8_159_939L, new FileInfo(linguisticModelPath).Length, "Packaged linguistic OCR model size mismatch.");
+    Equal(
+        linguisticModel.GetProperty("sha256").GetString()!,
+        Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(linguisticModelPath))),
+        "Packaged linguistic OCR model hash mismatch.");
     Equal(
         "pending",
         upstream.GetProperty("distributionDecision").GetString()!,

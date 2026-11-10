@@ -23,6 +23,9 @@
     <Content Include="../../src/VerboEmTela.Ocr.Tesseract/tessdata/por.traineddata"
              Link="tessdata/por.traineddata"
              CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="../../src/VerboEmTela.Ocr.Tesseract/tessdata_best/por.traineddata"
+             Link="tessdata_best/por.traineddata"
+             CopyToOutputDirectory="PreserveNewest" />
     <Content Include="../../src/VerboEmTela.Ocr.Tesseract/tessdata/LICENSE"
              Link="tessdata/LICENSE"
              CopyToOutputDirectory="PreserveNewest" />

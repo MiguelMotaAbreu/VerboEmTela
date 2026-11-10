@@ -5,20 +5,39 @@ namespace VerboEmTela.Ocr.Tesseract;
 
 public sealed class TesseractOcrRegionReader : IOcrRegionReader, IDisposable
 {
-    private readonly global::Tesseract.TesseractEngine _engine;
+    private readonly global::Tesseract.TesseractEngine _passwordEngine;
+    private readonly global::Tesseract.TesseractEngine _linguisticEngine;
     private readonly object _sync = new();
     private bool _disposed;
 
-    public TesseractOcrRegionReader(string tessdataPath)
+    public TesseractOcrRegionReader(
+        string passwordTessdataPath,
+        string linguisticTessdataPath)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(tessdataPath);
-
         if (!string.IsNullOrEmpty(
             Environment.GetEnvironmentVariable("TESSDATA_PREFIX")))
         {
             throw new InvalidOperationException(
                 "TESSDATA_PREFIX must be unset so the packaged OCR model cannot be overridden.");
         }
+
+        _passwordEngine = CreateEngine(passwordTessdataPath);
+
+        try
+        {
+            _linguisticEngine = CreateEngine(linguisticTessdataPath);
+        }
+        catch
+        {
+            _passwordEngine.Dispose();
+            throw;
+        }
+    }
+
+    private static global::Tesseract.TesseractEngine CreateEngine(
+        string tessdataPath)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(tessdataPath);
 
         var fullDataPath = Path.GetFullPath(tessdataPath);
         var modelPath = Path.Combine(
@@ -32,7 +51,7 @@ public sealed class TesseractOcrRegionReader : IOcrRegionReader, IDisposable
                 modelPath);
         }
 
-        _engine = new global::Tesseract.TesseractEngine(
+        return new global::Tesseract.TesseractEngine(
             fullDataPath,
             "por",
             global::Tesseract.EngineMode.LstmOnly);
@@ -51,7 +70,7 @@ public sealed class TesseractOcrRegionReader : IOcrRegionReader, IDisposable
 
             using var image = global::Tesseract.Pix.LoadFromMemory(
                 GrayscaleBmpEncoder.Encode(frame));
-            using var page = _engine.Process(
+            using var page = EngineFor(field).Process(
                 image,
                 PageSegmentationFor(field));
 
@@ -70,9 +89,24 @@ public sealed class TesseractOcrRegionReader : IOcrRegionReader, IDisposable
                 return;
             }
 
-            _engine.Dispose();
+            try
+            {
+                _linguisticEngine.Dispose();
+            }
+            finally
+            {
+                _passwordEngine.Dispose();
+            }
+
             _disposed = true;
         }
+    }
+
+    private global::Tesseract.TesseractEngine EngineFor(OcrFieldKind field)
+    {
+        return field is OcrFieldKind.Password
+            ? _passwordEngine
+            : _linguisticEngine;
     }
 
     private static global::Tesseract.PageSegMode PageSegmentationFor(

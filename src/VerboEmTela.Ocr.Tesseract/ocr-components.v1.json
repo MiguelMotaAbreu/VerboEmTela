@@ -8,14 +8,26 @@
     "license": "Apache-2.0",
     "embeddedEngineVersion": "5.2.0"
   },
-  "languageModel": {
-    "language": "por",
-    "repository": "https://github.com/tesseract-ocr/tessdata_fast",
-    "commit": "87416418657359cb625c412a48b6e1d6d41c29bd",
-    "sizeBytes": 1982756,
-    "sha256": "C4932B937207A9514B7514D518B931A99938C02A28A5A5A553F8599ED58B7DEB",
-    "license": "Apache-2.0"
-  },
+  "languageModels": [
+    {
+      "profile": "password",
+      "language": "por",
+      "repository": "https://github.com/tesseract-ocr/tessdata_fast",
+      "commit": "87416418657359cb625c412a48b6e1d6d41c29bd",
+      "sizeBytes": 1982756,
+      "sha256": "C4932B937207A9514B7514D518B931A99938C02A28A5A5A553F8599ED58B7DEB",
+      "license": "Apache-2.0"
+    },
+    {
+      "profile": "linguistic",
+      "language": "por",
+      "repository": "https://github.com/tesseract-ocr/tessdata_best",
+      "commit": "e12c65a915945e4c28e237a9b52bc4a8f39a0cec",
+      "sizeBytes": 8159939,
+      "sha256": "711DE9DBB8052067BD42F16B9119967F30BADA80D57E2EF24F65D09F531ADB04",
+      "license": "Apache-2.0"
+    }
+  ],
   "upstreamComparison": {
     "versionObserved": "5.5.4",
     "observedOn": "2026-11-10",

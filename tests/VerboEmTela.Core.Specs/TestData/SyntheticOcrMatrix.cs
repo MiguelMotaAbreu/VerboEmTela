@@ -9,8 +9,7 @@ internal sealed record SyntheticOcrCase(
     string ExpectedText,
     int Width,
     int Height,
-    double FontSize,
-    bool IsKnownCurrentLimitation = false);
+    double FontSize);
 
 internal static class SyntheticOcrMatrix
 {
@@ -89,8 +88,7 @@ internal static class SyntheticOcrMatrix
                 "GUICHÊ 03",
                 600,
                 120,
-                58,
-                IsKnownCurrentLimitation: true),
+                58),
         };
     }
 }
