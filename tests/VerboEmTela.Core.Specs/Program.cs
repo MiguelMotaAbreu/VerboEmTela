@@ -1,4 +1,6 @@
 using System.Diagnostics.CodeAnalysis;
+using System.Text.Json;
+using System.Text.Json.Serialization;
 using VerboEmTela.Core.Application;
 using VerboEmTela.Core.Detection;
 using VerboEmTela.Core.Frames;
@@ -55,6 +57,7 @@ var specifications = new (string Name, Action Run)[]
     ("defines one hundred synthetic call cases", DefinesSyntheticCallMatrix),
     ("contains only explicitly fictitious identities", SyntheticMatrixContainsOnlyFictitiousIdentities),
     ("processes the complete synthetic call matrix", ProcessesSyntheticCallMatrix),
+    ("validates privacy-safe video evidence metadata", ValidatesVideoEvidenceMetadata),
 };
 
 var failures = new List<string>();
@@ -979,6 +982,43 @@ static void ProcessesSyntheticCallMatrix()
             detected.Destination,
             $"{testCase.Id} destination mismatch.");
     }
+}
+
+static void ValidatesVideoEvidenceMetadata()
+{
+    var evidencePath = Path.Combine(
+        AppContext.BaseDirectory,
+        "Evidence",
+        "video-evidence.v1.json");
+    var manifest = JsonSerializer.Deserialize<VideoEvidenceManifest>(
+        File.ReadAllText(evidencePath),
+        new JsonSerializerOptions
+        {
+            PropertyNameCaseInsensitive = true,
+            UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow,
+        });
+
+    NotNull(manifest, "The video evidence manifest must be readable.");
+    Equal(1, manifest.SchemaVersion, "The evidence schema version is incompatible.");
+    Equal("EV-001", manifest.EvidenceId, "The evidence identifier changed unexpectedly.");
+    True(
+        manifest.Sha256.Length == 64 && manifest.Sha256.All(Uri.IsHexDigit),
+        "The evidence hash must be a complete SHA-256 value.");
+    Equal(3_574_090L, manifest.SizeBytes, "The recorded video size changed unexpectedly.");
+    Equal(60d, manifest.DurationSeconds, "The recorded duration is incorrect.");
+    Equal(1920, manifest.Video.Width, "The recorded video width is incorrect.");
+    Equal(1080, manifest.Video.Height, "The recorded video height is incorrect.");
+    Equal(60d, manifest.Video.FramesPerSecond, "The recorded frame rate is incorrect.");
+    Equal(444, manifest.Video.DataRateKbps, "The recorded video data rate is incorrect.");
+    Equal(
+        "{34363248-0000-0010-8000-00AA00389B71}",
+        manifest.Video.CodecIdentifier,
+        "The raw video codec identifier changed unexpectedly.");
+    True(manifest.Audio.Present, "The Windows metadata indicates an audio track.");
+    Equal(14, manifest.Audio.BitRateKbps, "The recorded audio bit rate is incorrect.");
+    False(
+        manifest.Audio.CodecIdentified,
+        "The audio codec must remain explicitly unidentified until verified.");
 }
 
 static CallDetector ArmedDetector()

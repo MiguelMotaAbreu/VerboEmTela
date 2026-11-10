@@ -10,4 +10,10 @@
     <ProjectReference Include="../../src/VerboEmTela.Core/VerboEmTela.Core.csproj" />
     <ProjectReference Include="../../src/VerboEmTela.Windows/VerboEmTela.Windows.csproj" />
   </ItemGroup>
+
+  <ItemGroup>
+    <Content Include="../../evidence/video-evidence.v1.json"
+             Link="Evidence/video-evidence.v1.json"
+             CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
 </Project>

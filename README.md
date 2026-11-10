@@ -131,4 +131,8 @@ As especificações mantêm uma matriz determinística de 100 casos exclusivamen
 
 Todos os nomes começam com `PESSOA FICTÍCIA` e todas as senhas usam o prefixo reservado `TST`. A matriz cobre recepção, classificação e odontologia, possui resultado esperado e é executada integralmente pelos testes. Ela ainda não substitui as fixtures visuais necessárias para comprovar OCR.
 
+### Evidência do vídeo
+
+Os metadados técnicos e o hash da gravação fornecida estão em [evidence/README.md](evidence/README.md) e [evidence/video-evidence.v1.json](evidence/video-evidence.v1.json). O manifesto é validado pelas especificações e contém apenas duração, dimensões, taxas, identificadores técnicos, tamanho e hash. Nenhum quadro, áudio ou conteúdo do painel foi incluído no repositório.
+
 Consulte [plan.md](plan.md) para o plano completo e os critérios de validação.

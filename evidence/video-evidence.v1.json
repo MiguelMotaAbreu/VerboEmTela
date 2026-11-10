@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "evidenceId": "EV-001",
+  "sha256": "9A8254E100860649D276AD9498A5C822A2708F004676B715E045449B8981EFCF",
+  "sizeBytes": 3574090,
+  "durationSeconds": 60,
+  "video": {
+    "width": 1920,
+    "height": 1080,
+    "framesPerSecond": 60,
+    "dataRateKbps": 444,
+    "codecIdentifier": "{34363248-0000-0010-8000-00AA00389B71}"
+  },
+  "audio": {
+    "present": true,
+    "bitRateKbps": 14,
+    "codecIdentified": false
+  }
+}
