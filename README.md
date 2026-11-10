@@ -119,4 +119,16 @@ dotnet run --project tests/VerboEmTela.Core.Specs
 
 O executável de especificações não usa pacotes externos nem dados de pacientes.
 
+### Matriz sintética
+
+As especificações mantêm uma matriz determinística de 100 casos exclusivamente fictícios. Ela contém dez casos de cada categoria:
+
+- chamada por nome e somente por senha;
+- rechamada após retorno ao painel e chamada diferente sem retorno intermediário;
+- destino abreviado com mapeamento e destino literal;
+- nome longo e nome acentuado;
+- transição incompleta e tela inválida.
+
+Todos os nomes começam com `PESSOA FICTÍCIA` e todas as senhas usam o prefixo reservado `TST`. A matriz cobre recepção, classificação e odontologia, possui resultado esperado e é executada integralmente pelos testes. Ela ainda não substitui as fixtures visuais necessárias para comprovar OCR.
+
 Consulte [plan.md](plan.md) para o plano completo e os critérios de validação.

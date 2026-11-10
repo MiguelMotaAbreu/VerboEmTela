@@ -5,6 +5,7 @@ using VerboEmTela.Core.Frames;
 using VerboEmTela.Core.Imaging;
 using VerboEmTela.Core.Layout;
 using VerboEmTela.Core.Processing;
+using VerboEmTela.Core.Specs.TestData;
 using VerboEmTela.Windows.Application;
 using VerboEmTela.Windows.Capture;
 using VerboEmTela.Windows.Configuration;
@@ -51,6 +52,9 @@ var specifications = new (string Name, Action Run)[]
     ("follows valid application state transitions", FollowsValidApplicationStateTransitions),
     ("rejects invalid application state transitions", RejectsInvalidApplicationStateTransitions),
     ("clears transient content on safety transitions", ClearsTransientContentOnSafetyTransitions),
+    ("defines one hundred synthetic call cases", DefinesSyntheticCallMatrix),
+    ("contains only explicitly fictitious identities", SyntheticMatrixContainsOnlyFictitiousIdentities),
+    ("processes the complete synthetic call matrix", ProcessesSyntheticCallMatrix),
 };
 
 var failures = new List<string>();
@@ -833,6 +837,148 @@ static void ClearsTransientContentOnSafetyTransitions()
         6,
         cleaner.InvocationCount,
         "Pause, resume, panel loss, error, recovery and stop must each clear content.");
+}
+
+static void DefinesSyntheticCallMatrix()
+{
+    var matrix = SyntheticCallMatrix.Create();
+
+    Equal(100, matrix.Count, "The synthetic matrix must contain exactly 100 cases.");
+    Equal(
+        100,
+        matrix.Select(testCase => testCase.Id).Distinct().Count(),
+        "Every synthetic case must have a unique identifier.");
+
+    foreach (var kind in Enum.GetValues<SyntheticEventKind>())
+    {
+        Equal(
+            10,
+            matrix.Count(testCase => testCase.Kind == kind),
+            $"Synthetic category {kind} must contain ten cases.");
+    }
+
+    Equal(
+        80,
+        matrix.Count(testCase =>
+            testCase.ExpectedOutcome is SyntheticExpectedOutcome.Detect),
+        "The matrix must contain 80 complete detectable cases.");
+    Equal(
+        20,
+        matrix.Count(testCase =>
+            testCase.ExpectedOutcome is SyntheticExpectedOutcome.Reject),
+        "The matrix must contain 20 intentionally rejected cases.");
+    SequenceEqual(
+        new[] { "CLASSIFICAÇÃO", "ODONTOLOGIA", "RECEPÇÃO" },
+        matrix
+            .Where(testCase => testCase.Sector is not null)
+            .Select(testCase => testCase.Sector!)
+            .Distinct()
+            .Order()
+            .ToArray(),
+        "The matrix must cover all three panel sectors.");
+}
+
+static void SyntheticMatrixContainsOnlyFictitiousIdentities()
+{
+    var matrix = SyntheticCallMatrix.Create();
+
+    True(
+        matrix.All(testCase =>
+            testCase.Name is null ||
+            testCase.Name.StartsWith(
+                "PESSOA FICTÍCIA",
+                StringComparison.Ordinal)),
+        "Every synthetic name must be explicitly marked as fictitious.");
+    True(
+        matrix.All(testCase =>
+            testCase.Password is null ||
+            testCase.Password.StartsWith("TST", StringComparison.Ordinal)),
+        "Every synthetic password must use the reserved TST prefix.");
+}
+
+static void ProcessesSyntheticCallMatrix()
+{
+    foreach (var testCase in SyntheticCallMatrix.Create())
+    {
+        var extractor = new StubTextExtractor(new ExtractedCallText(
+            testCase.Sector,
+            testCase.Name,
+            testCase.Password,
+            testCase.Destination));
+        var processor = TestFrameProcessor(extractor);
+        processor.Process(DashboardFrame(), TimeSpan.Zero);
+        DetectedCall? detected;
+
+        switch (testCase.Kind)
+        {
+            case SyntheticEventKind.InvalidScreen:
+                var invalid = processor.Process(
+                    SolidFrame(192, 108, 30, 30, 30),
+                    Ms(1_000));
+                detected = invalid.DetectedCall;
+                Equal(
+                    FrameProcessingStatus.InvalidLayout,
+                    invalid.Status,
+                    $"{testCase.Id} must be rejected as an invalid screen.");
+                Equal(
+                    0,
+                    extractor.InvocationCount,
+                    $"{testCase.Id} must not invoke text extraction.");
+                break;
+
+            case SyntheticEventKind.RecallAfterDashboard:
+                NotNull(
+                    ProcessStableFrameCall(processor, 1_000),
+                    $"{testCase.Id} setup call was not detected.");
+                processor.Process(DashboardFrame(), Ms(2_000));
+                detected = ProcessStableFrameCall(processor, 3_000);
+                break;
+
+            case SyntheticEventKind.RapidConsecutiveCall:
+                extractor.Result = new ExtractedCallText(
+                    testCase.Sector,
+                    $"PESSOA FICTÍCIA ANTERIOR {testCase.Id}",
+                    null,
+                    "CONSULTÓRIO 9");
+                NotNull(
+                    ProcessStableFrameCall(processor, 1_000),
+                    $"{testCase.Id} preceding call was not detected.");
+                extractor.Result = new ExtractedCallText(
+                    testCase.Sector,
+                    testCase.Name,
+                    testCase.Password,
+                    testCase.Destination);
+                detected = ProcessStableFrameCall(processor, 2_000);
+                break;
+
+            default:
+                detected = ProcessStableFrameCall(processor, 1_000);
+                break;
+        }
+
+        if (testCase.ExpectedOutcome is SyntheticExpectedOutcome.Reject)
+        {
+            True(
+                detected is null,
+                $"{testCase.Id} must not produce a detected call.");
+            continue;
+        }
+
+        NotNull(detected, $"{testCase.Id} must produce one detected call.");
+        Equal(testCase.Sector!, detected.Sector, $"{testCase.Id} sector mismatch.");
+        Equal(
+            testCase.ExpectedIdentityKind!.Value,
+            detected.IdentityKind,
+            $"{testCase.Id} identity kind mismatch.");
+        Equal(
+            testCase.ExpectedIdentity!,
+            detected.Identity,
+            $"{testCase.Id} identity mismatch.");
+        Equal(
+            testCase.Destination!,
+            detected.Destination,
+            $"{testCase.Id} destination mismatch.");
+    }
 }
 
 static CallDetector ArmedDetector()
