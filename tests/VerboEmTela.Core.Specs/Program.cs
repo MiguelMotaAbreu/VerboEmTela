@@ -62,6 +62,7 @@ var specifications = new (string Name, Action Run)[]
     ("reads the synthetic OCR field matrix with packaged Portuguese profiles", ReadsSyntheticOcrMatrixWithPackagedProfiles),
     ("extracts one associated synthetic call with packaged OCR profiles", ExtractsAssociatedSyntheticCallWithPackagedOcrProfiles),
     ("emits one stable call from packaged OCR profiles", EmitsStableCallFromPackagedOcrProfiles),
+    ("emits one stable password-only call from packaged OCR profiles", EmitsStablePasswordOnlyCallFromPackagedOcrProfiles),
     ("resets packaged OCR stability across a mixed transition", ResetsPackagedOcrStabilityAcrossMixedTransition),
     ("rejects OCR text touching the crop boundary", RejectsOcrTextTouchingCropBoundary),
     ("validates the pinned OCR component inventory", ValidatesOcrComponentInventory),
@@ -1094,6 +1095,53 @@ static void EmitsStableCallFromPackagedOcrProfiles()
     Equal("GUICHÊ 03", third.DetectedCall.Destination, "Detected OCR destination mismatch.");
     Equal(FrameProcessingStatus.CallObserved, persistent.Status, "Persistent OCR content must not emit twice.");
     True(persistent.DetectedCall is null, "Persistent OCR content produced a duplicate call.");
+}
+
+static void EmitsStablePasswordOnlyCallFromPackagedOcrProfiles()
+{
+    var fixture = AssociatedSyntheticCallFixture(name: string.Empty);
+    var layoutRecognizer = new FixedPanelLayoutRecognizer(PanelMode.Dashboard);
+
+    using var reader = new TesseractOcrRegionReader(
+        Path.Combine(AppContext.BaseDirectory, "tessdata"),
+        Path.Combine(AppContext.BaseDirectory, "tessdata_best"));
+    var processor = new CallFrameProcessor(
+        layoutRecognizer,
+        new CallRegionTextExtractor(fixture.Layout, reader));
+
+    _ = processor.Process(fixture.Frame, TimeSpan.Zero);
+    layoutRecognizer.Mode = PanelMode.FullScreenCall;
+    var first = processor.Process(fixture.Frame, Ms(1_000));
+    var second = processor.Process(fixture.Frame, Ms(1_300));
+    var third = processor.Process(fixture.Frame, Ms(1_600));
+
+    Equal(
+        FrameProcessingStatus.CallObserved,
+        first.Status,
+        "First password-only OCR observation must start stability.");
+    Equal(
+        FrameProcessingStatus.CallObserved,
+        second.Status,
+        "Second password-only OCR observation must remain pending.");
+    Equal(
+        FrameProcessingStatus.CallDetected,
+        third.Status,
+        "Third stable password-only OCR observation must emit the call.");
+    NotNull(
+        third.DetectedCall,
+        "Stable password-only OCR readings must produce a detected call.");
+    Equal(
+        IdentityKind.Password,
+        third.DetectedCall.IdentityKind,
+        "Password-only OCR identity kind mismatch.");
+    Equal(
+        "TST0001",
+        third.DetectedCall.Identity,
+        "Password-only OCR identity mismatch.");
+    Equal(
+        "GUICHÊ 03",
+        third.DetectedCall.Destination,
+        "Password-only OCR destination mismatch.");
 }
 
 static void ResetsPackagedOcrStabilityAcrossMixedTransition()
