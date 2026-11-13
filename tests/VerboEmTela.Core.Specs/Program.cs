@@ -61,6 +61,7 @@ var specifications = new (string Name, Action Run)[]
     ("does not expose rejected OCR field text", DoesNotExposeRejectedOcrFieldText),
     ("reads the synthetic OCR field matrix with packaged Portuguese profiles", ReadsSyntheticOcrMatrixWithPackagedProfiles),
     ("extracts one full synthetic call category cycle with packaged OCR", ExtractsSyntheticCallCategoryCycleWithPackagedOcr),
+    ("extracts one reduced-contrast call category cycle with packaged OCR", ExtractsReducedContrastCallCategoryCycleWithPackagedOcr),
     ("extracts one associated synthetic call with packaged OCR profiles", ExtractsAssociatedSyntheticCallWithPackagedOcrProfiles),
     ("emits one stable call from packaged OCR profiles", EmitsStableCallFromPackagedOcrProfiles),
     ("emits one stable password-only call from packaged OCR profiles", EmitsStablePasswordOnlyCallFromPackagedOcrProfiles),
@@ -1031,56 +1032,95 @@ static void ExtractsSyntheticCallCategoryCycleWithPackagedOcr()
 
     foreach (var testCase in cases)
     {
-        var fixture = SyntheticCallOcrFixture(testCase);
-        var extracted = new CallRegionTextExtractor(fixture.Layout, reader)
-            .ExtractCall(new CapturedFrame(fixture.Frame, Ms(6_000)));
+        AssertSyntheticCallOcrExtraction(reader, testCase);
+    }
+}
 
-        if (testCase.ExpectedOutcome is SyntheticExpectedOutcome.Detect)
-        {
-            EqualOptionalText(
-                testCase.Sector,
-                extracted.Sector,
-                $"{testCase.Id} sector OCR mismatch.");
-            EqualOptionalText(
-                testCase.Name,
-                extracted.Name,
-                $"{testCase.Id} name OCR mismatch.");
-            EqualOptionalText(
-                testCase.Password,
-                extracted.Password,
-                $"{testCase.Id} password OCR mismatch.");
-            EqualOptionalText(
-                testCase.Destination,
-                extracted.Destination,
-                $"{testCase.Id} destination OCR mismatch.");
-            continue;
-        }
+static void ExtractsReducedContrastCallCategoryCycleWithPackagedOcr()
+{
+    var cases = SyntheticCallMatrix.Create()
+        .Skip(Enum.GetValues<SyntheticEventKind>().Length)
+        .Take(Enum.GetValues<SyntheticEventKind>().Length)
+        .ToArray();
 
-        True(
-            extracted.Sector is null ||
-            extracted.Destination is null ||
-            (extracted.Name is null && extracted.Password is null),
-            $"{testCase.Id} invalid synthetic OCR case became complete.");
+    Equal(10, cases.Length, "The reduced-contrast OCR cycle must contain ten cases.");
+    Equal(
+        10,
+        cases.Select(testCase => testCase.Kind).Distinct().Count(),
+        "The reduced-contrast OCR cycle must cover every synthetic event kind once.");
 
-        if (testCase.Sector is null)
-        {
-            True(extracted.Sector is null, $"{testCase.Id} blank sector produced OCR text.");
-        }
+    using var reader = new TesseractOcrRegionReader(
+        Path.Combine(AppContext.BaseDirectory, "tessdata"),
+        Path.Combine(AppContext.BaseDirectory, "tessdata_best"));
 
-        if (testCase.Name is null)
-        {
-            True(extracted.Name is null, $"{testCase.Id} blank name produced OCR text.");
-        }
+    foreach (var testCase in cases)
+    {
+        AssertSyntheticCallOcrExtraction(
+            reader,
+            testCase,
+            darkestIntensity: 45,
+            lightestIntensity: 210);
+    }
+}
 
-        if (testCase.Password is null)
-        {
-            True(extracted.Password is null, $"{testCase.Id} blank password produced OCR text.");
-        }
+static void AssertSyntheticCallOcrExtraction(
+    TesseractOcrRegionReader reader,
+    SyntheticCallCase testCase,
+    byte darkestIntensity = 0,
+    byte lightestIntensity = 255)
+{
+    var fixture = SyntheticCallOcrFixture(
+        testCase,
+        darkestIntensity,
+        lightestIntensity);
+    var extracted = new CallRegionTextExtractor(fixture.Layout, reader)
+        .ExtractCall(new CapturedFrame(fixture.Frame, Ms(6_000)));
 
-        if (testCase.Destination is null)
-        {
-            True(extracted.Destination is null, $"{testCase.Id} blank destination produced OCR text.");
-        }
+    if (testCase.ExpectedOutcome is SyntheticExpectedOutcome.Detect)
+    {
+        EqualOptionalText(
+            testCase.Sector,
+            extracted.Sector,
+            $"{testCase.Id} sector OCR mismatch.");
+        EqualOptionalText(
+            testCase.Name,
+            extracted.Name,
+            $"{testCase.Id} name OCR mismatch.");
+        EqualOptionalText(
+            testCase.Password,
+            extracted.Password,
+            $"{testCase.Id} password OCR mismatch.");
+        EqualOptionalText(
+            testCase.Destination,
+            extracted.Destination,
+            $"{testCase.Id} destination OCR mismatch.");
+        return;
+    }
+
+    True(
+        extracted.Sector is null ||
+        extracted.Destination is null ||
+        (extracted.Name is null && extracted.Password is null),
+        $"{testCase.Id} invalid synthetic OCR case became complete.");
+
+    if (testCase.Sector is null)
+    {
+        True(extracted.Sector is null, $"{testCase.Id} blank sector produced OCR text.");
+    }
+
+    if (testCase.Name is null)
+    {
+        True(extracted.Name is null, $"{testCase.Id} blank name produced OCR text.");
+    }
+
+    if (testCase.Password is null)
+    {
+        True(extracted.Password is null, $"{testCase.Id} blank password produced OCR text.");
+    }
+
+    if (testCase.Destination is null)
+    {
+        True(extracted.Destination is null, $"{testCase.Id} blank destination produced OCR text.");
     }
 }
 
@@ -1491,7 +1531,9 @@ static (CallRegionLayout Layout, Rgb24Frame Frame) AssociatedSyntheticCallFixtur
 }
 
 static (CallRegionLayout Layout, Rgb24Frame Frame) SyntheticCallOcrFixture(
-    SyntheticCallCase testCase)
+    SyntheticCallCase testCase,
+    byte darkestIntensity = 0,
+    byte lightestIntensity = 255)
 {
     const int frameWidth = 1_920;
     const int frameHeight = 430;
@@ -1540,9 +1582,42 @@ static (CallRegionLayout Layout, Rgb24Frame Frame) SyntheticCallOcrFixture(
         testCase.Destination,
         fontSize: 48);
 
+    RemapRgbIntensityRange(
+        pixels,
+        darkestIntensity,
+        lightestIntensity);
+
     return (
         layout,
         new Rgb24Frame(frameWidth, frameHeight, pixels));
+}
+
+static void RemapRgbIntensityRange(
+    byte[] pixels,
+    byte darkestIntensity,
+    byte lightestIntensity)
+{
+    ArgumentNullException.ThrowIfNull(pixels);
+
+    if (darkestIntensity >= lightestIntensity)
+    {
+        throw new ArgumentException(
+            "The darkest intensity must be lower than the lightest intensity.");
+    }
+
+    if (darkestIntensity == 0 && lightestIntensity == 255)
+    {
+        return;
+    }
+
+    var intensityRange = lightestIntensity - darkestIntensity;
+
+    for (var index = 0; index < pixels.Length; index++)
+    {
+        pixels[index] = (byte)(
+            darkestIntensity +
+            ((pixels[index] * intensityRange + 127) / 255));
+    }
 }
 
 static void BlitSyntheticOcrField(
