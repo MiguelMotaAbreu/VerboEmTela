@@ -130,7 +130,18 @@ Parâmetros iniciais da prova, mantidos configuráveis internamente:
 - Cada ocorrência é anunciada uma vez.
 - Mapeamento de destino usa chave normalizada exata.
 - Sem mapeamento, usar o texto literal somente depois da validação de estabilidade e caracteres.
+- O catálogo abaixo fornece referências canônicas para os destinos conhecidos, mas não é uma lista fechada e não bloqueia outros destinos válidos.
 - Nome, senha ou destino incompleto bloqueia o anúncio e coloca o aplicativo em aviso atual, sem persistência.
+
+#### Catálogo de referência confirmado para destinos falados
+
+- **Classificação:** Sala 1; Sala 2; Sala Extra.
+- **Cadastro:** Recepção 1; Recepção 2; Recepção 3.
+- **Atendimento Médico:** Sala 3; Sala 4; Sala 5; Sala 6; Sala 7; Sala 8; Odontologia; Sala Extra.
+
+O catálogo registra as combinações conhecidas entre o campo do painel e o destino canônico que deverá ser falado. Ele serve como referência para pronúncia, mapeamentos e cobertura de testes; uma combinação fora da lista não deve ser rejeitada somente por não constar no catálogo.
+
+**PENDÊNCIA DE VALIDAÇÃO:** confirmar, em evidência anonimizada do SoulMV, o texto bruto exibido para cada destino e eventuais abreviações, zeros à esquerda ou aliases. Até essa confirmação, não presumir que o texto visual seja idêntico ao destino falado e não criar conversões por semelhança.
 
 ### Som, fila e retomada
 

@@ -60,10 +60,12 @@ var specifications = new (string Name, Action Run)[]
     ("applies character rules for each OCR field", AppliesOcrFieldCharacterRules),
     ("does not expose rejected OCR field text", DoesNotExposeRejectedOcrFieldText),
     ("reads the synthetic OCR field matrix with packaged Portuguese profiles", ReadsSyntheticOcrMatrixWithPackagedProfiles),
+    ("extracts one full synthetic call category cycle with packaged OCR", ExtractsSyntheticCallCategoryCycleWithPackagedOcr),
     ("extracts one associated synthetic call with packaged OCR profiles", ExtractsAssociatedSyntheticCallWithPackagedOcrProfiles),
     ("emits one stable call from packaged OCR profiles", EmitsStableCallFromPackagedOcrProfiles),
     ("emits one stable password-only call from packaged OCR profiles", EmitsStablePasswordOnlyCallFromPackagedOcrProfiles),
     ("resets packaged OCR stability across a mixed transition", ResetsPackagedOcrStabilityAcrossMixedTransition),
+    ("rejects packaged OCR text ending in ellipsis", RejectsPackagedOcrTextEndingInEllipsis),
     ("rejects OCR text touching the crop boundary", RejectsOcrTextTouchingCropBoundary),
     ("validates the pinned OCR component inventory", ValidatesOcrComponentInventory),
     ("streams screen frames from an explicit region", () => StreamsScreenFrames().GetAwaiter().GetResult()),
@@ -82,6 +84,7 @@ var specifications = new (string Name, Action Run)[]
     ("rejects invalid application state transitions", RejectsInvalidApplicationStateTransitions),
     ("clears transient content on safety transitions", ClearsTransientContentOnSafetyTransitions),
     ("defines one hundred synthetic call cases", DefinesSyntheticCallMatrix),
+    ("covers the confirmed spoken destination references", CoversConfirmedSpokenDestinationReferences),
     ("contains only explicitly fictitious identities", SyntheticMatrixContainsOnlyFictitiousIdentities),
     ("processes the complete synthetic call matrix", ProcessesSyntheticCallMatrix),
     ("validates privacy-safe video evidence metadata", ValidatesVideoEvidenceMetadata),
@@ -950,7 +953,7 @@ static void ReadsSyntheticOcrMatrixWithPackagedProfiles()
         Path.Combine(AppContext.BaseDirectory, "tessdata_best"));
     var matrix = SyntheticOcrMatrix.Create();
 
-    Equal(9, matrix.Count, "The synthetic OCR matrix size changed unexpectedly.");
+    Equal(10, matrix.Count, "The synthetic OCR matrix size changed unexpectedly.");
     True(
         matrix
             .Where(testCase => testCase.Field is OcrFieldKind.Name)
@@ -1010,6 +1013,77 @@ static void ReadsSyntheticOcrMatrixWithPackagedProfiles()
         $"Every synthetic OCR case must match exactly; actual: {exactMatches} of {matrix.Count}.");
 }
 
+static void ExtractsSyntheticCallCategoryCycleWithPackagedOcr()
+{
+    var cases = SyntheticCallMatrix.Create()
+        .Take(Enum.GetValues<SyntheticEventKind>().Length)
+        .ToArray();
+
+    Equal(10, cases.Length, "The packaged OCR category cycle must contain ten cases.");
+    Equal(
+        10,
+        cases.Select(testCase => testCase.Kind).Distinct().Count(),
+        "The packaged OCR category cycle must cover every synthetic event kind once.");
+
+    using var reader = new TesseractOcrRegionReader(
+        Path.Combine(AppContext.BaseDirectory, "tessdata"),
+        Path.Combine(AppContext.BaseDirectory, "tessdata_best"));
+
+    foreach (var testCase in cases)
+    {
+        var fixture = SyntheticCallOcrFixture(testCase);
+        var extracted = new CallRegionTextExtractor(fixture.Layout, reader)
+            .ExtractCall(new CapturedFrame(fixture.Frame, Ms(6_000)));
+
+        if (testCase.ExpectedOutcome is SyntheticExpectedOutcome.Detect)
+        {
+            EqualOptionalText(
+                testCase.Sector,
+                extracted.Sector,
+                $"{testCase.Id} sector OCR mismatch.");
+            EqualOptionalText(
+                testCase.Name,
+                extracted.Name,
+                $"{testCase.Id} name OCR mismatch.");
+            EqualOptionalText(
+                testCase.Password,
+                extracted.Password,
+                $"{testCase.Id} password OCR mismatch.");
+            EqualOptionalText(
+                testCase.Destination,
+                extracted.Destination,
+                $"{testCase.Id} destination OCR mismatch.");
+            continue;
+        }
+
+        True(
+            extracted.Sector is null ||
+            extracted.Destination is null ||
+            (extracted.Name is null && extracted.Password is null),
+            $"{testCase.Id} invalid synthetic OCR case became complete.");
+
+        if (testCase.Sector is null)
+        {
+            True(extracted.Sector is null, $"{testCase.Id} blank sector produced OCR text.");
+        }
+
+        if (testCase.Name is null)
+        {
+            True(extracted.Name is null, $"{testCase.Id} blank name produced OCR text.");
+        }
+
+        if (testCase.Password is null)
+        {
+            True(extracted.Password is null, $"{testCase.Id} blank password produced OCR text.");
+        }
+
+        if (testCase.Destination is null)
+        {
+            True(extracted.Destination is null, $"{testCase.Id} blank destination produced OCR text.");
+        }
+    }
+}
+
 static void RejectsOcrTextTouchingCropBoundary()
 {
     using var reader = new TesseractOcrRegionReader(
@@ -1039,6 +1113,35 @@ static void RejectsOcrTextTouchingCropBoundary()
         normalized.RejectionReason,
         "Clipped OCR rejection reason mismatch.");
     True(normalized.Text is null, "Rejected clipped OCR text must not escape validation.");
+}
+
+static void RejectsPackagedOcrTextEndingInEllipsis()
+{
+    using var reader = new TesseractOcrRegionReader(
+        Path.Combine(AppContext.BaseDirectory, "tessdata"),
+        Path.Combine(AppContext.BaseDirectory, "tessdata_best"));
+    var incompleteName = new SyntheticOcrCase(
+        "OCR-ELLIPSIS-001",
+        OcrFieldKind.Name,
+        "PESSOA FICTÍCIA...",
+        "PESSOA FICTÍCIA...",
+        900,
+        120,
+        58);
+
+    var read = reader.Read(
+        incompleteName.Field,
+        RenderSyntheticText(incompleteName));
+    var normalized = OcrTextNormalizer.Normalize(
+        incompleteName.Field,
+        read);
+
+    False(normalized.IsAccepted, "OCR text ending in ellipsis must not be accepted.");
+    Equal(
+        OcrTextRejectionReason.Ellipsis,
+        normalized.RejectionReason,
+        "Packaged OCR ellipsis rejection reason mismatch.");
+    True(normalized.Text is null, "Rejected ellipsis OCR text must not escape validation.");
 }
 
 static void ExtractsAssociatedSyntheticCallWithPackagedOcrProfiles()
@@ -1387,6 +1490,87 @@ static (CallRegionLayout Layout, Rgb24Frame Frame) AssociatedSyntheticCallFixtur
         new Rgb24Frame(frameWidth, frameHeight, pixels));
 }
 
+static (CallRegionLayout Layout, Rgb24Frame Frame) SyntheticCallOcrFixture(
+    SyntheticCallCase testCase)
+{
+    const int frameWidth = 1_920;
+    const int frameHeight = 430;
+    var layout = new CallRegionLayout(
+        sector: new FrameRegion(0, 0, 900, 120),
+        name: new FrameRegion(0, 120, 1_400, 190),
+        password: new FrameRegion(1_400, 120, 520, 120),
+        destination: new FrameRegion(0, 310, 1_400, 120));
+    var pixels = FilledPixels(
+        frameWidth,
+        frameHeight,
+        red: 255,
+        green: 255,
+        blue: 255);
+
+    BlitSyntheticOcrField(
+        pixels,
+        frameWidth,
+        layout.Sector,
+        testCase.Id,
+        OcrFieldKind.Sector,
+        testCase.Sector,
+        fontSize: 52);
+    BlitSyntheticOcrField(
+        pixels,
+        frameWidth,
+        layout.Name,
+        testCase.Id,
+        OcrFieldKind.Name,
+        testCase.Name,
+        fontSize: 44);
+    BlitSyntheticOcrField(
+        pixels,
+        frameWidth,
+        layout.Password,
+        testCase.Id,
+        OcrFieldKind.Password,
+        testCase.Password,
+        fontSize: 64);
+    BlitSyntheticOcrField(
+        pixels,
+        frameWidth,
+        layout.Destination,
+        testCase.Id,
+        OcrFieldKind.Destination,
+        testCase.Destination,
+        fontSize: 48);
+
+    return (
+        layout,
+        new Rgb24Frame(frameWidth, frameHeight, pixels));
+}
+
+static void BlitSyntheticOcrField(
+    byte[] destinationPixels,
+    int destinationWidth,
+    FrameRegion destinationRegion,
+    string caseId,
+    OcrFieldKind field,
+    string? text,
+    double fontSize)
+{
+    var renderedText = text ?? string.Empty;
+    var rendered = RenderSyntheticText(new SyntheticOcrCase(
+        $"{caseId}-{field}",
+        field,
+        renderedText,
+        renderedText,
+        destinationRegion.Width,
+        destinationRegion.Height,
+        fontSize));
+
+    BlitLuminanceRegion(
+        destinationPixels,
+        destinationWidth,
+        destinationRegion,
+        rendered);
+}
+
 static void BlitLuminanceRegion(
     byte[] destinationPixels,
     int destinationWidth,
@@ -1426,6 +1610,18 @@ static void AssertOcrRejection(
     False(result.IsAccepted, $"OCR text must be rejected as {expectedReason}.");
     Equal(expectedReason, result.RejectionReason, "OCR rejection reason mismatch.");
     True(result.Text is null, "Rejected OCR text must not expose normalized content.");
+}
+
+static void EqualOptionalText(
+    string? expected,
+    string? actual,
+    string message)
+{
+    if (!string.Equals(expected, actual, StringComparison.Ordinal))
+    {
+        throw new InvalidOperationException(
+            $"{message} Expected: {expected ?? "<null>"}. Actual: {actual ?? "<null>"}.");
+    }
 }
 
 static async Task StreamsScreenFrames()
@@ -1859,7 +2055,7 @@ static void DefinesSyntheticCallMatrix()
             testCase.ExpectedOutcome is SyntheticExpectedOutcome.Reject),
         "The matrix must contain 20 intentionally rejected cases.");
     SequenceEqual(
-        new[] { "CLASSIFICAÇÃO", "ODONTOLOGIA", "RECEPÇÃO" },
+        new[] { "ATENDIMENTO MÉDICO", "CADASTRO", "CLASSIFICAÇÃO" },
         matrix
             .Where(testCase => testCase.Sector is not null)
             .Select(testCase => testCase.Sector!)
@@ -1867,6 +2063,48 @@ static void DefinesSyntheticCallMatrix()
             .Order()
             .ToArray(),
         "The matrix must cover all three panel sectors.");
+}
+
+static void CoversConfirmedSpokenDestinationReferences()
+{
+    var routes = ReferenceDestinationCatalog.Routes;
+
+    Equal(14, routes.Count, "The confirmed destination catalog size changed unexpectedly.");
+    Equal(14, routes.Distinct().Count(), "Confirmed sector-destination routes must be unique.");
+    SequenceEqual(
+        new[] { "ATENDIMENTO MÉDICO", "CADASTRO", "CLASSIFICAÇÃO" },
+        routes
+            .Select(route => route.Sector)
+            .Distinct()
+            .Order()
+            .ToArray(),
+        "The confirmed destination catalog must cover the three panel fields.");
+
+    var operationalCases = SyntheticCallMatrix.Create()
+        .Where(testCase =>
+            testCase.ExpectedOutcome is SyntheticExpectedOutcome.Detect &&
+            testCase.Kind is not SyntheticEventKind.MappedDestination &&
+            testCase.Kind is not SyntheticEventKind.LiteralDestination)
+        .ToArray();
+
+    True(
+        operationalCases.All(testCase =>
+            ReferenceDestinationCatalog.Contains(
+                testCase.Sector!,
+                testCase.Destination!)),
+        "Standard synthetic calls must cover the confirmed sector-destination references.");
+
+    True(
+        SyntheticCallMatrix.Create()
+            .Where(testCase =>
+                testCase.Kind is SyntheticEventKind.LiteralDestination &&
+                testCase.Sector is not null &&
+                testCase.Destination is not null)
+            .Any(testCase =>
+                !ReferenceDestinationCatalog.Contains(
+                    testCase.Sector!,
+                    testCase.Destination!)),
+        "The reference catalog must not block valid literal destinations outside the list.");
 }
 
 static void SyntheticMatrixContainsOnlyFictitiousIdentities()

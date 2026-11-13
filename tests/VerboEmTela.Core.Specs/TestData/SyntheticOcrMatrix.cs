@@ -91,6 +91,14 @@ internal static class SyntheticOcrMatrix
                 600,
                 120,
                 58),
+            new SyntheticOcrCase(
+                "OCR-010",
+                OcrFieldKind.Destination,
+                "SALA EXTRA",
+                "SALA EXTRA",
+                620,
+                120,
+                58),
         };
     }
 }

@@ -70,15 +70,22 @@ public sealed class TesseractOcrRegionReader : IOcrRegionReader, IDisposable
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
 
+            if (IsUniform(frame))
+            {
+                return new OcrRegionRead(null);
+            }
+
             using var image = global::Tesseract.Pix.LoadFromMemory(
                 GrayscaleBmpEncoder.Encode(frame));
             using var page = EngineFor(field).Process(
                 image,
                 PageSegmentationFor(field));
+            var text = page.GetText();
 
             return new OcrRegionRead(
-                page.GetText(),
+                text,
                 page.GetMeanConfidence(),
+                !string.IsNullOrWhiteSpace(text) &&
                 TouchesBoundary(page, frame));
         }
     }
@@ -110,6 +117,22 @@ public sealed class TesseractOcrRegionReader : IOcrRegionReader, IDisposable
         return field is OcrFieldKind.Password
             ? _passwordEngine
             : _linguisticEngine;
+    }
+
+    private static bool IsUniform(Luminance8Frame frame)
+    {
+        var pixels = frame.PixelData.Span;
+        var first = pixels[0];
+
+        for (var index = 1; index < pixels.Length; index++)
+        {
+            if (pixels[index] != first)
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     private static bool TouchesBoundary(

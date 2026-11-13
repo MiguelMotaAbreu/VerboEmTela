@@ -41,25 +41,37 @@ internal sealed record SyntheticCallCase(
     public string? ExpectedIdentity => Name ?? Password;
 }
 
+internal static class ReferenceDestinationCatalog
+{
+    public static IReadOnlyList<(string Sector, string Destination)> Routes { get; } =
+        new[]
+        {
+            ("CLASSIFICAÇÃO", "SALA 1"),
+            ("CLASSIFICAÇÃO", "SALA 2"),
+            ("CLASSIFICAÇÃO", "SALA EXTRA"),
+            ("CADASTRO", "RECEPÇÃO 1"),
+            ("CADASTRO", "RECEPÇÃO 2"),
+            ("CADASTRO", "RECEPÇÃO 3"),
+            ("ATENDIMENTO MÉDICO", "SALA 3"),
+            ("ATENDIMENTO MÉDICO", "SALA 4"),
+            ("ATENDIMENTO MÉDICO", "SALA 5"),
+            ("ATENDIMENTO MÉDICO", "SALA 6"),
+            ("ATENDIMENTO MÉDICO", "SALA 7"),
+            ("ATENDIMENTO MÉDICO", "SALA 8"),
+            ("ATENDIMENTO MÉDICO", "ODONTOLOGIA"),
+            ("ATENDIMENTO MÉDICO", "SALA EXTRA"),
+        };
+
+    public static bool Contains(string sector, string destination)
+    {
+        return Routes.Any(route =>
+            string.Equals(route.Sector, sector, StringComparison.Ordinal) &&
+            string.Equals(route.Destination, destination, StringComparison.Ordinal));
+    }
+}
+
 internal static class SyntheticCallMatrix
 {
-    private static readonly string[] Sectors =
-    {
-        "RECEPÇÃO",
-        "CLASSIFICAÇÃO",
-        "ODONTOLOGIA",
-    };
-
-    private static readonly string[] Destinations =
-    {
-        "CONSULTÓRIO 1",
-        "CONSULTÓRIO 3",
-        "RECEPÇÃO 3",
-        "CLASSIFICAÇÃO",
-        "ODONTOLOGIA",
-        "SALA DE PROCEDIMENTOS",
-    };
-
     public static IReadOnlyList<SyntheticCallCase> Create()
     {
         var cases = new List<SyntheticCallCase>(100);
@@ -79,8 +91,10 @@ internal static class SyntheticCallMatrix
         SyntheticEventKind kind)
     {
         var id = $"SYN-{index:000}";
-        var sector = Sectors[(index - 1) % Sectors.Length];
-        var destination = Destinations[(index - 1) % Destinations.Length];
+        var route = ReferenceDestinationCatalog.Routes[
+            (index - 1) % ReferenceDestinationCatalog.Routes.Count];
+        var sector = route.Sector;
+        var destination = route.Destination;
         var name = $"PESSOA FICTÍCIA TESTE {index:000}";
         string? password = null;
         var expectedOutcome = SyntheticExpectedOutcome.Detect;
