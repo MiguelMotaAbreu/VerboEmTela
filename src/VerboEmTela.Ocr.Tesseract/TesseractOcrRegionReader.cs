@@ -6,6 +6,8 @@ namespace VerboEmTela.Ocr.Tesseract;
 public sealed class TesseractOcrRegionReader : IOcrRegionReader, IDisposable
 {
     private const int BoundarySafetyMarginPixels = 1;
+    private const int MaximumBlankLuminanceRange = 20;
+    private const float MinimumPasswordConfidence = 0.50f;
 
     private readonly global::Tesseract.TesseractEngine _passwordEngine;
     private readonly global::Tesseract.TesseractEngine _linguisticEngine;
@@ -70,7 +72,7 @@ public sealed class TesseractOcrRegionReader : IOcrRegionReader, IDisposable
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
 
-            if (IsUniform(frame))
+            if (HasNoTrustworthyContrast(frame))
             {
                 return new OcrRegionRead(null);
             }
@@ -81,10 +83,17 @@ public sealed class TesseractOcrRegionReader : IOcrRegionReader, IDisposable
                 image,
                 PageSegmentationFor(field));
             var text = page.GetText();
+            var confidence = page.GetMeanConfidence();
+
+            if (field is OcrFieldKind.Password &&
+                confidence < MinimumPasswordConfidence)
+            {
+                return new OcrRegionRead(null, confidence);
+            }
 
             return new OcrRegionRead(
                 text,
-                page.GetMeanConfidence(),
+                confidence,
                 !string.IsNullOrWhiteSpace(text) &&
                 TouchesBoundary(page, frame));
         }
@@ -119,14 +128,18 @@ public sealed class TesseractOcrRegionReader : IOcrRegionReader, IDisposable
             : _linguisticEngine;
     }
 
-    private static bool IsUniform(Luminance8Frame frame)
+    private static bool HasNoTrustworthyContrast(Luminance8Frame frame)
     {
         var pixels = frame.PixelData.Span;
-        var first = pixels[0];
+        var minimum = pixels[0];
+        var maximum = pixels[0];
 
         for (var index = 1; index < pixels.Length; index++)
         {
-            if (pixels[index] != first)
+            minimum = Math.Min(minimum, pixels[index]);
+            maximum = Math.Max(maximum, pixels[index]);
+
+            if (maximum - minimum > MaximumBlankLuminanceRange)
             {
                 return false;
             }

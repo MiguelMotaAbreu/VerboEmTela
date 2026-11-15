@@ -62,6 +62,8 @@ var specifications = new (string Name, Action Run)[]
     ("reads the synthetic OCR field matrix with packaged Portuguese profiles", ReadsSyntheticOcrMatrixWithPackagedProfiles),
     ("extracts one full synthetic call category cycle with packaged OCR", ExtractsSyntheticCallCategoryCycleWithPackagedOcr),
     ("extracts one reduced-contrast call category cycle with packaged OCR", ExtractsReducedContrastCallCategoryCycleWithPackagedOcr),
+    ("extracts one noisy call category cycle with packaged OCR", ExtractsNoisyCallCategoryCycleWithPackagedOcr),
+    ("extracts one block-resampled call category cycle with packaged OCR", ExtractsBlockResampledCallCategoryCycleWithPackagedOcr),
     ("extracts one associated synthetic call with packaged OCR profiles", ExtractsAssociatedSyntheticCallWithPackagedOcrProfiles),
     ("emits one stable call from packaged OCR profiles", EmitsStableCallFromPackagedOcrProfiles),
     ("emits one stable password-only call from packaged OCR profiles", EmitsStablePasswordOnlyCallFromPackagedOcrProfiles),
@@ -1063,21 +1065,115 @@ static void ExtractsReducedContrastCallCategoryCycleWithPackagedOcr()
     }
 }
 
-static void AssertSyntheticCallOcrExtraction(
+static void ExtractsNoisyCallCategoryCycleWithPackagedOcr()
+{
+    var kinds = Enum.GetValues<SyntheticEventKind>();
+    var cases = SyntheticCallMatrix.Create()
+        .Skip(kinds.Length * 2)
+        .Take(kinds.Length)
+        .ToArray();
+
+    Equal(10, cases.Length, "The noisy OCR cycle must contain ten cases.");
+    Equal(
+        10,
+        cases.Select(testCase => testCase.Kind).Distinct().Count(),
+        "The noisy OCR cycle must cover every synthetic event kind once.");
+
+    using var reader = new TesseractOcrRegionReader(
+        Path.Combine(AppContext.BaseDirectory, "tessdata"),
+        Path.Combine(AppContext.BaseDirectory, "tessdata_best"));
+
+    foreach (var testCase in cases)
+    {
+        AssertSyntheticCallOcrExtraction(
+            reader,
+            testCase,
+            noiseAmplitude: 18);
+    }
+}
+
+static void ExtractsBlockResampledCallCategoryCycleWithPackagedOcr()
+{
+    var kinds = Enum.GetValues<SyntheticEventKind>();
+    var cases = SyntheticCallMatrix.Create()
+        .Skip(kinds.Length * 3)
+        .Take(kinds.Length)
+        .ToArray();
+
+    Equal(10, cases.Length, "The block-resampled OCR cycle must contain ten cases.");
+    Equal(
+        10,
+        cases.Select(testCase => testCase.Kind).Distinct().Count(),
+        "The block-resampled OCR cycle must cover every synthetic event kind once.");
+
+    using var reader = new TesseractOcrRegionReader(
+        Path.Combine(AppContext.BaseDirectory, "tessdata"),
+        Path.Combine(AppContext.BaseDirectory, "tessdata_best"));
+
+    var detectedCount = 0;
+
+    foreach (var testCase in cases)
+    {
+        if (AssertSyntheticCallOcrExtraction(
+                reader,
+                testCase,
+                averagingBlockSize: 2,
+                allowSafeRejection: true))
+        {
+            detectedCount++;
+        }
+    }
+
+    Equal(
+        7,
+        detectedCount,
+        "The block-resampled cycle must safely reject only the ambiguous password call.");
+}
+
+static bool AssertSyntheticCallOcrExtraction(
     TesseractOcrRegionReader reader,
     SyntheticCallCase testCase,
     byte darkestIntensity = 0,
-    byte lightestIntensity = 255)
+    byte lightestIntensity = 255,
+    byte noiseAmplitude = 0,
+    int averagingBlockSize = 1,
+    bool allowSafeRejection = false)
 {
     var fixture = SyntheticCallOcrFixture(
         testCase,
         darkestIntensity,
-        lightestIntensity);
+        lightestIntensity,
+        noiseAmplitude,
+        averagingBlockSize);
     var extracted = new CallRegionTextExtractor(fixture.Layout, reader)
         .ExtractCall(new CapturedFrame(fixture.Frame, Ms(6_000)));
 
     if (testCase.ExpectedOutcome is SyntheticExpectedOutcome.Detect)
     {
+        if (allowSafeRejection)
+        {
+            EqualExpectedTextOrMissing(
+                testCase.Sector,
+                extracted.Sector,
+                $"{testCase.Id} sector OCR mismatch.");
+            EqualExpectedTextOrMissing(
+                testCase.Name,
+                extracted.Name,
+                $"{testCase.Id} name OCR mismatch.");
+            EqualExpectedTextOrMissing(
+                testCase.Password,
+                extracted.Password,
+                $"{testCase.Id} password OCR mismatch.");
+            EqualExpectedTextOrMissing(
+                testCase.Destination,
+                extracted.Destination,
+                $"{testCase.Id} destination OCR mismatch.");
+
+            return extracted.Sector is not null &&
+                   extracted.Destination is not null &&
+                   (extracted.Name is not null || extracted.Password is not null);
+        }
+
         EqualOptionalText(
             testCase.Sector,
             extracted.Sector,
@@ -1094,7 +1190,7 @@ static void AssertSyntheticCallOcrExtraction(
             testCase.Destination,
             extracted.Destination,
             $"{testCase.Id} destination OCR mismatch.");
-        return;
+        return true;
     }
 
     True(
@@ -1122,6 +1218,21 @@ static void AssertSyntheticCallOcrExtraction(
     {
         True(extracted.Destination is null, $"{testCase.Id} blank destination produced OCR text.");
     }
+
+    return false;
+}
+
+static void EqualExpectedTextOrMissing(
+    string? expected,
+    string? actual,
+    string message)
+{
+    if (actual is null)
+    {
+        return;
+    }
+
+    EqualOptionalText(expected, actual, message);
 }
 
 static void RejectsOcrTextTouchingCropBoundary()
@@ -1533,7 +1644,9 @@ static (CallRegionLayout Layout, Rgb24Frame Frame) AssociatedSyntheticCallFixtur
 static (CallRegionLayout Layout, Rgb24Frame Frame) SyntheticCallOcrFixture(
     SyntheticCallCase testCase,
     byte darkestIntensity = 0,
-    byte lightestIntensity = 255)
+    byte lightestIntensity = 255,
+    byte noiseAmplitude = 0,
+    int averagingBlockSize = 1)
 {
     const int frameWidth = 1_920;
     const int frameHeight = 430;
@@ -1586,10 +1699,127 @@ static (CallRegionLayout Layout, Rgb24Frame Frame) SyntheticCallOcrFixture(
         pixels,
         darkestIntensity,
         lightestIntensity);
+    AddSparseDeterministicLuminanceNoise(
+        pixels,
+        noiseAmplitude);
+    ApplyBlockAveraging(
+        pixels,
+        frameWidth,
+        frameHeight,
+        averagingBlockSize);
 
     return (
         layout,
         new Rgb24Frame(frameWidth, frameHeight, pixels));
+}
+
+static void ApplyBlockAveraging(
+    byte[] pixels,
+    int width,
+    int height,
+    int blockSize)
+{
+    ArgumentNullException.ThrowIfNull(pixels);
+
+    if (width <= 0 || height <= 0)
+    {
+        throw new ArgumentOutOfRangeException(
+            nameof(width),
+            "Image dimensions must be positive.");
+    }
+
+    if (blockSize <= 0)
+    {
+        throw new ArgumentOutOfRangeException(nameof(blockSize));
+    }
+
+    var expectedLength = checked(width * height * 3);
+    if (pixels.Length != expectedLength)
+    {
+        throw new ArgumentException(
+            $"Packed RGB data must contain exactly {expectedLength} bytes.",
+            nameof(pixels));
+    }
+
+    if (blockSize == 1)
+    {
+        return;
+    }
+
+    for (var blockTop = 0; blockTop < height; blockTop += blockSize)
+    {
+        var blockBottom = Math.Min(blockTop + blockSize, height);
+
+        for (var blockLeft = 0; blockLeft < width; blockLeft += blockSize)
+        {
+            var blockRight = Math.Min(blockLeft + blockSize, width);
+            var redSum = 0;
+            var greenSum = 0;
+            var blueSum = 0;
+            var pixelCount = 0;
+
+            for (var y = blockTop; y < blockBottom; y++)
+            {
+                for (var x = blockLeft; x < blockRight; x++)
+                {
+                    var offset = ((y * width) + x) * 3;
+                    redSum += pixels[offset];
+                    greenSum += pixels[offset + 1];
+                    blueSum += pixels[offset + 2];
+                    pixelCount++;
+                }
+            }
+
+            for (var y = blockTop; y < blockBottom; y++)
+            {
+                for (var x = blockLeft; x < blockRight; x++)
+                {
+                    var offset = ((y * width) + x) * 3;
+                    pixels[offset] = (byte)((redSum + (pixelCount / 2)) / pixelCount);
+                    pixels[offset + 1] = (byte)((greenSum + (pixelCount / 2)) / pixelCount);
+                    pixels[offset + 2] = (byte)((blueSum + (pixelCount / 2)) / pixelCount);
+                }
+            }
+        }
+    }
+}
+
+static void AddSparseDeterministicLuminanceNoise(
+    byte[] pixels,
+    byte amplitude)
+{
+    ArgumentNullException.ThrowIfNull(pixels);
+
+    if (pixels.Length % 3 != 0)
+    {
+        throw new ArgumentException(
+            "Packed RGB data must contain three bytes per pixel.",
+            nameof(pixels));
+    }
+
+    if (amplitude == 0)
+    {
+        return;
+    }
+
+    const int pixelPeriod = 37;
+    var pixelCount = pixels.Length / 3;
+
+    for (var pixel = 0; pixel < pixelCount; pixel += pixelPeriod)
+    {
+        var offset = pixel * 3;
+        var signedAmplitude = (pixel / pixelPeriod) % 2 == 0
+            ? amplitude
+            : -amplitude;
+        var noisyIntensity = Math.Clamp(
+            pixels[offset] + signedAmplitude,
+            byte.MinValue,
+            byte.MaxValue);
+
+        pixels[offset] = (byte)noisyIntensity;
+        pixels[offset + 1] = (byte)noisyIntensity;
+        pixels[offset + 2] = (byte)noisyIntensity;
+    }
 }
 
 static void RemapRgbIntensityRange(

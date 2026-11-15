@@ -120,6 +120,10 @@ Parâmetros iniciais da prova, mantidos configuráveis internamente:
 - Pontuação do OCR é apenas sinal auxiliar; nunca é garantia de correção.
 - Texto tocando o limite do recorte, contendo reticências ou caracteres não permitidos é tratado como incompleto.
 
+**HIPÓTESE:** durante a prova sintética, leituras de senha com confiança inferior a `0,50` são rejeitadas. O limite separou as leituras corretas observadas (`0,55` a `0,65`) da leitura ambígua reamostrada (`0,29`), mas confiança igual ou superior ao limite não prova correção.
+
+**PENDÊNCIA DE VALIDAÇÃO:** recalibrar ou confirmar o limite de confiança de senha com evidência anonimizada do SoulMV, especialmente uma chamada somente por senha. Até essa validação, o valor permanece provisório e não constitui aceite operacional.
+
 ### Identificação e frase
 
 - Quando houver nome e senha, anunciar somente o nome.
