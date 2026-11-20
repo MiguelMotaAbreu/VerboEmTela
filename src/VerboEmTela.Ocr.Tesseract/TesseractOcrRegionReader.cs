@@ -9,13 +9,13 @@ public sealed class TesseractOcrRegionReader : IOcrRegionReader, IDisposable
     private const int MaximumBlankLuminanceRange = 20;
     private const float MinimumPasswordConfidence = 0.50f;
 
-    private readonly global::Tesseract.TesseractEngine _passwordEngine;
+    private readonly global::Tesseract.TesseractEngine _fastEngine;
     private readonly global::Tesseract.TesseractEngine _linguisticEngine;
     private readonly object _sync = new();
     private bool _disposed;
 
     public TesseractOcrRegionReader(
-        string passwordTessdataPath,
+        string fastTessdataPath,
         string linguisticTessdataPath)
     {
         if (!string.IsNullOrEmpty(
@@ -25,7 +25,7 @@ public sealed class TesseractOcrRegionReader : IOcrRegionReader, IDisposable
                 "TESSDATA_PREFIX must be unset so the packaged OCR model cannot be overridden.");
         }
 
-        _passwordEngine = CreateEngine(passwordTessdataPath);
+        _fastEngine = CreateEngine(fastTessdataPath);
 
         try
         {
@@ -33,7 +33,7 @@ public sealed class TesseractOcrRegionReader : IOcrRegionReader, IDisposable
         }
         catch
         {
-            _passwordEngine.Dispose();
+            _fastEngine.Dispose();
             throw;
         }
     }
@@ -79,6 +79,12 @@ public sealed class TesseractOcrRegionReader : IOcrRegionReader, IDisposable
 
             using var image = global::Tesseract.Pix.LoadFromMemory(
                 GrayscaleBmpEncoder.Encode(frame));
+
+            if (field is OcrFieldKind.Name)
+            {
+                return ReadNameWithMultilineConsensus(image, frame);
+            }
+
             using var page = EngineFor(field).Process(
                 image,
                 PageSegmentationFor(field));
@@ -114,7 +120,7 @@ public sealed class TesseractOcrRegionReader : IOcrRegionReader, IDisposable
             }
             finally
             {
-                _passwordEngine.Dispose();
+                _fastEngine.Dispose();
             }
 
             _disposed = true;
@@ -124,8 +130,69 @@ public sealed class TesseractOcrRegionReader : IOcrRegionReader, IDisposable
     private global::Tesseract.TesseractEngine EngineFor(OcrFieldKind field)
     {
         return field is OcrFieldKind.Password
-            ? _passwordEngine
+            ? _fastEngine
             : _linguisticEngine;
+    }
+
+    private OcrRegionRead ReadNameWithMultilineConsensus(
+        global::Tesseract.Pix image,
+        Luminance8Frame frame)
+    {
+        using var linguisticPage = _linguisticEngine.Process(
+            image,
+            global::Tesseract.PageSegMode.SingleBlock);
+        var linguisticText = linguisticPage.GetText();
+        var confidence = linguisticPage.GetMeanConfidence();
+
+        if (!HasMultipleTextLines(linguisticText))
+        {
+            return new OcrRegionRead(
+                linguisticText,
+                confidence,
+                !string.IsNullOrWhiteSpace(linguisticText) &&
+                TouchesBoundary(linguisticPage, frame));
+        }
+
+        using var verificationPage = _fastEngine.Process(
+            image,
+            global::Tesseract.PageSegMode.SingleBlock);
+        var verificationText = verificationPage.GetText();
+        confidence = Math.Min(
+            confidence,
+            verificationPage.GetMeanConfidence());
+
+        if (!string.Equals(
+                NormalizeWhitespace(linguisticText),
+                NormalizeWhitespace(verificationText),
+                StringComparison.Ordinal))
+        {
+            return new OcrRegionRead(null, confidence);
+        }
+
+        return new OcrRegionRead(
+            linguisticText,
+            confidence,
+            !string.IsNullOrWhiteSpace(linguisticText) &&
+            (TouchesBoundary(linguisticPage, frame) ||
+             TouchesBoundary(verificationPage, frame)));
+    }
+
+    private static bool HasMultipleTextLines(string value)
+    {
+        return value
+            .Split(
+                new[] { "\r\n", "\r", "\n" },
+                StringSplitOptions.RemoveEmptyEntries)
+            .Length > 1;
+    }
+
+    private static string NormalizeWhitespace(string value)
+    {
+        return string.Join(
+            ' ',
+            value.Split(
+                (char[]?)null,
+                StringSplitOptions.RemoveEmptyEntries));
     }
 
     private static bool HasNoTrustworthyContrast(Luminance8Frame frame)

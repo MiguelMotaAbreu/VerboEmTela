@@ -119,10 +119,13 @@ Parâmetros iniciais da prova, mantidos configuráveis internamente:
 - Valores conflitantes reiniciam a janela de estabilidade.
 - Pontuação do OCR é apenas sinal auxiliar; nunca é garantia de correção.
 - Texto tocando o limite do recorte, contendo reticências ou caracteres não permitidos é tratado como incompleto.
+- Nome reconhecido em múltiplas linhas exige concordância exata entre os dois modelos locais após apenas colapsar whitespace; divergência descarta o nome.
 
 **HIPÓTESE:** durante a prova sintética, leituras de senha com confiança inferior a `0,50` são rejeitadas. O limite separou as leituras corretas observadas (`0,55` a `0,65`) da leitura ambígua reamostrada (`0,29`), mas confiança igual ou superior ao limite não prova correção.
 
 **PENDÊNCIA DE VALIDAÇÃO:** recalibrar ou confirmar o limite de confiança de senha com evidência anonimizada do SoulMV, especialmente uma chamada somente por senha. Até essa validação, o valor permanece provisório e não constitui aceite operacional.
+
+**PENDÊNCIA DE VALIDAÇÃO:** confirmar em evidência anonimizada se e como nomes longos são quebrados no SoulMV. O consenso entre modelos para nomes multilinha foi comprovado apenas em fixtures sintéticas e seu impacto de desempenho deverá ser medido no computador-alvo.
 
 ### Identificação e frase
 

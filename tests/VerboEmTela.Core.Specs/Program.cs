@@ -64,6 +64,7 @@ var specifications = new (string Name, Action Run)[]
     ("extracts one reduced-contrast call category cycle with packaged OCR", ExtractsReducedContrastCallCategoryCycleWithPackagedOcr),
     ("extracts one noisy call category cycle with packaged OCR", ExtractsNoisyCallCategoryCycleWithPackagedOcr),
     ("extracts one block-resampled call category cycle with packaged OCR", ExtractsBlockResampledCallCategoryCycleWithPackagedOcr),
+    ("extracts one wrapped-name call category cycle with packaged OCR", ExtractsWrappedNameCallCategoryCycleWithPackagedOcr),
     ("extracts one associated synthetic call with packaged OCR profiles", ExtractsAssociatedSyntheticCallWithPackagedOcrProfiles),
     ("emits one stable call from packaged OCR profiles", EmitsStableCallFromPackagedOcrProfiles),
     ("emits one stable password-only call from packaged OCR profiles", EmitsStablePasswordOnlyCallFromPackagedOcrProfiles),
@@ -1130,6 +1131,47 @@ static void ExtractsBlockResampledCallCategoryCycleWithPackagedOcr()
         "The block-resampled cycle must safely reject only the ambiguous password call.");
 }
 
+static void ExtractsWrappedNameCallCategoryCycleWithPackagedOcr()
+{
+    var kinds = Enum.GetValues<SyntheticEventKind>();
+    var cases = SyntheticCallMatrix.Create()
+        .Skip(kinds.Length * 4)
+        .Take(kinds.Length)
+        .ToArray();
+
+    Equal(10, cases.Length, "The wrapped-name OCR cycle must contain ten cases.");
+    Equal(
+        10,
+        cases.Select(testCase => testCase.Kind).Distinct().Count(),
+        "The wrapped-name OCR cycle must cover every synthetic event kind once.");
+    True(
+        cases.Count(testCase => testCase.Name is not null) >= 7,
+        "The wrapped-name OCR cycle must exercise multiple named calls.");
+
+    using var reader = new TesseractOcrRegionReader(
+        Path.Combine(AppContext.BaseDirectory, "tessdata"),
+        Path.Combine(AppContext.BaseDirectory, "tessdata_best"));
+
+    var detectedCount = 0;
+
+    foreach (var testCase in cases)
+    {
+        if (AssertSyntheticCallOcrExtraction(
+                reader,
+                testCase,
+                allowSafeRejection: true,
+                wrapNameAcrossTwoLines: true))
+        {
+            detectedCount++;
+        }
+    }
+
+    Equal(
+        7,
+        detectedCount,
+        "The wrapped-name cycle must safely reject only the ambiguous accented name.");
+}
+
 static bool AssertSyntheticCallOcrExtraction(
     TesseractOcrRegionReader reader,
     SyntheticCallCase testCase,
@@ -1137,14 +1179,16 @@ static bool AssertSyntheticCallOcrExtraction(
     byte lightestIntensity = 255,
     byte noiseAmplitude = 0,
     int averagingBlockSize = 1,
-    bool allowSafeRejection = false)
+    bool allowSafeRejection = false,
+    bool wrapNameAcrossTwoLines = false)
 {
     var fixture = SyntheticCallOcrFixture(
         testCase,
         darkestIntensity,
         lightestIntensity,
         noiseAmplitude,
-        averagingBlockSize);
+        averagingBlockSize,
+        wrapNameAcrossTwoLines);
     var extracted = new CallRegionTextExtractor(fixture.Layout, reader)
         .ExtractCall(new CapturedFrame(fixture.Frame, Ms(6_000)));
 
@@ -1646,7 +1690,8 @@ static (CallRegionLayout Layout, Rgb24Frame Frame) SyntheticCallOcrFixture(
     byte darkestIntensity = 0,
     byte lightestIntensity = 255,
     byte noiseAmplitude = 0,
-    int averagingBlockSize = 1)
+    int averagingBlockSize = 1,
+    bool wrapNameAcrossTwoLines = false)
 {
     const int frameWidth = 1_920;
     const int frameHeight = 430;
@@ -1676,7 +1721,9 @@ static (CallRegionLayout Layout, Rgb24Frame Frame) SyntheticCallOcrFixture(
         layout.Name,
         testCase.Id,
         OcrFieldKind.Name,
-        testCase.Name,
+        wrapNameAcrossTwoLines
+            ? WrapTextAcrossTwoLines(testCase.Name)
+            : testCase.Name,
         fontSize: 44);
     BlitSyntheticOcrField(
         pixels,
@@ -1711,6 +1758,37 @@ static (CallRegionLayout Layout, Rgb24Frame Frame) SyntheticCallOcrFixture(
     return (
         layout,
         new Rgb24Frame(frameWidth, frameHeight, pixels));
+}
+
+static string? WrapTextAcrossTwoLines(string? text)
+{
+    if (text is null)
+    {
+        return null;
+    }
+
+    var midpoint = text.Length / 2;
+    var splitAt = -1;
+    var shortestDistance = int.MaxValue;
+
+    for (var index = 0; index < text.Length; index++)
+    {
+        if (text[index] != ' ')
+        {
+            continue;
+        }
+
+        var distance = Math.Abs(index - midpoint);
+        if (distance < shortestDistance)
+        {
+            splitAt = index;
+            shortestDistance = distance;
+        }
+    }
+
+    return splitAt < 0
+        ? text
+        : text[..splitAt] + "\n" + text[(splitAt + 1)..];
 }
 
 static void ApplyBlockAveraging(
