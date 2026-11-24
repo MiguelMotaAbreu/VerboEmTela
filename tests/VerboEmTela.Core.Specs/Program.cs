@@ -37,7 +37,10 @@ var specifications = new (string Name, Action Run)[]
     ("selects the name before the password from the same frame", SelectsNameBeforePassword),
     ("uses a password when a name is absent", UsesPasswordWhenNameIsAbsent),
     ("waits for complete text without disarming the detector", WaitsForCompleteText),
+    ("restarts stability after an incomplete OCR frame", RestartsStabilityAfterIncompleteText),
+    ("does not reemit a detected call after incomplete OCR", DoesNotReemitAfterIncompleteText),
     ("preserves arming across a brief invalid transition", PreservesArmingAcrossBriefInvalidTransition),
+    ("restarts stability after a brief invalid transition", RestartsStabilityAfterBriefInvalidTransition),
     ("disarms the frame pipeline when the layout becomes invalid", PipelineDisarmsOnInvalidLayout),
     ("disarms before a call after a long invalid sampling gap", DisarmsBeforeCallAfterLongInvalidGap),
     ("detects an identical recall through the frame pipeline", PipelineDetectsIdenticalRecall),
@@ -65,6 +68,7 @@ var specifications = new (string Name, Action Run)[]
     ("extracts one noisy call category cycle with packaged OCR", ExtractsNoisyCallCategoryCycleWithPackagedOcr),
     ("extracts one block-resampled call category cycle with packaged OCR", ExtractsBlockResampledCallCategoryCycleWithPackagedOcr),
     ("extracts one wrapped-name call category cycle with packaged OCR", ExtractsWrappedNameCallCategoryCycleWithPackagedOcr),
+    ("extracts one reduced-font call category cycle with packaged OCR", ExtractsReducedFontCallCategoryCycleWithPackagedOcr),
     ("extracts one associated synthetic call with packaged OCR profiles", ExtractsAssociatedSyntheticCallWithPackagedOcrProfiles),
     ("emits one stable call from packaged OCR profiles", EmitsStableCallFromPackagedOcrProfiles),
     ("emits one stable password-only call from packaged OCR profiles", EmitsStablePasswordOnlyCallFromPackagedOcrProfiles),
@@ -368,6 +372,97 @@ static void WaitsForCompleteText()
     NotNull(detected, "Complete frames after a partial reading must still be accepted.");
 }
 
+static void RestartsStabilityAfterIncompleteText()
+{
+    var extractor = CompleteExtractor();
+    var processor = TestFrameProcessor(extractor);
+    var callFrame = SyntheticFrame((22, 6, 0.90));
+
+    processor.Process(DashboardFrame(), TimeSpan.Zero);
+    Equal(
+        FrameProcessingStatus.CallObserved,
+        processor.Process(callFrame, Ms(1_000)).Status,
+        "The first complete frame must start a candidate.");
+    Equal(
+        FrameProcessingStatus.CallObserved,
+        processor.Process(callFrame, Ms(1_300)).Status,
+        "The second complete frame must remain pending.");
+
+    extractor.Result = new ExtractedCallText(
+        "CADASTRO",
+        "PESSOA TESTE",
+        null,
+        null);
+    Equal(
+        FrameProcessingStatus.IncompleteCall,
+        processor.Process(callFrame, Ms(1_600)).Status,
+        "An incomplete OCR frame must reject the current composition.");
+
+    extractor.Result = new ExtractedCallText(
+        "CADASTRO",
+        "PESSOA TESTE",
+        null,
+        "RECEPÇÃO 1");
+    var restartedFirst = processor.Process(callFrame, Ms(1_900));
+    var restartedSecond = processor.Process(callFrame, Ms(2_200));
+    var restartedThird = processor.Process(callFrame, Ms(2_500));
+
+    Equal(
+        FrameProcessingStatus.CallObserved,
+        restartedFirst.Status,
+        "The first frame after an incomplete reading must restart stability.");
+    Equal(
+        FrameProcessingStatus.CallObserved,
+        restartedSecond.Status,
+        "The restarted candidate must still require the full stable window.");
+    Equal(
+        FrameProcessingStatus.CallDetected,
+        restartedThird.Status,
+        "Only three new coherent frames may emit after an incomplete reading.");
+    NotNull(
+        restartedThird.DetectedCall,
+        "The detector must remain armed after discarding an incomplete candidate.");
+}
+
+static void DoesNotReemitAfterIncompleteText()
+{
+    var extractor = CompleteExtractor();
+    var processor = TestFrameProcessor(extractor);
+    var callFrame = SyntheticFrame((22, 6, 0.90));
+
+    processor.Process(DashboardFrame(), TimeSpan.Zero);
+    NotNull(
+        ProcessStableFrameCall(processor, 1_000),
+        "The initial stable call must be detected.");
+
+    extractor.Result = new ExtractedCallText(
+        "CADASTRO",
+        "PESSOA TESTE",
+        null,
+        null);
+    Equal(
+        FrameProcessingStatus.IncompleteCall,
+        processor.Process(callFrame, Ms(1_900)).Status,
+        "An incomplete frame after emission must remain rejected.");
+
+    extractor.Result = new ExtractedCallText(
+        "CADASTRO",
+        "PESSOA TESTE",
+        null,
+        "RECEPÇÃO 1");
+    foreach (var observedAt in new[] { 2_200, 2_500, 2_800 })
+    {
+        var result = processor.Process(callFrame, Ms(observedAt));
+        Equal(
+            FrameProcessingStatus.CallObserved,
+            result.Status,
+            "The already emitted call must remain suppressed without a dashboard return.");
+        True(
+            result.DetectedCall is null,
+            "An incomplete frame must not make persistent content emit twice.");
+    }
+}
+
 static void PipelineDisarmsOnInvalidLayout()
 {
     var extractor = CompleteExtractor();
@@ -413,6 +508,42 @@ static void PreservesArmingAcrossBriefInvalidTransition()
 
     NotNull(detected, "A stable call after the observed brief transition must be detected.");
     Equal(3, extractor.InvocationCount, "Only stable call frames may reach extraction.");
+}
+
+static void RestartsStabilityAfterBriefInvalidTransition()
+{
+    var extractor = CompleteExtractor();
+    var processor = TestFrameProcessor(extractor);
+    var callFrame = SyntheticFrame((22, 6, 0.90));
+    var invalidFrame = SolidFrame(192, 108, 40, 40, 40);
+
+    processor.Process(DashboardFrame(), TimeSpan.Zero);
+    _ = processor.Process(callFrame, Ms(1_000));
+    _ = processor.Process(callFrame, Ms(1_300));
+    Equal(
+        FrameProcessingStatus.LayoutTransitionObserved,
+        processor.Process(invalidFrame, Ms(1_400)).Status,
+        "A brief invalid frame must remain inside the grace period.");
+
+    var restartedFirst = processor.Process(callFrame, Ms(1_600));
+    var restartedSecond = processor.Process(callFrame, Ms(1_900));
+    var restartedThird = processor.Process(callFrame, Ms(2_200));
+
+    Equal(
+        FrameProcessingStatus.CallObserved,
+        restartedFirst.Status,
+        "The first valid frame after a visual transition must restart stability.");
+    Equal(
+        FrameProcessingStatus.CallObserved,
+        restartedSecond.Status,
+        "A brief invalid transition must not preserve partial observations.");
+    Equal(
+        FrameProcessingStatus.CallDetected,
+        restartedThird.Status,
+        "Only a new uninterrupted stable window may emit the call.");
+    NotNull(
+        restartedThird.DetectedCall,
+        "A brief invalid transition must preserve arming while resetting stability.");
 }
 
 static void DisarmsBeforeCallAfterLongInvalidGap()
@@ -1172,6 +1303,44 @@ static void ExtractsWrappedNameCallCategoryCycleWithPackagedOcr()
         "The wrapped-name cycle must safely reject only the ambiguous accented name.");
 }
 
+static void ExtractsReducedFontCallCategoryCycleWithPackagedOcr()
+{
+    var kinds = Enum.GetValues<SyntheticEventKind>();
+    var cases = SyntheticCallMatrix.Create()
+        .Skip(kinds.Length * 5)
+        .Take(kinds.Length)
+        .ToArray();
+
+    Equal(10, cases.Length, "The reduced-font OCR cycle must contain ten cases.");
+    Equal(
+        10,
+        cases.Select(testCase => testCase.Kind).Distinct().Count(),
+        "The reduced-font OCR cycle must cover every synthetic event kind once.");
+
+    using var reader = new TesseractOcrRegionReader(
+        Path.Combine(AppContext.BaseDirectory, "tessdata"),
+        Path.Combine(AppContext.BaseDirectory, "tessdata_best"));
+
+    var detectedCount = 0;
+
+    foreach (var testCase in cases)
+    {
+        if (AssertSyntheticCallOcrExtraction(
+                reader,
+                testCase,
+                allowSafeRejection: true,
+                fontScale: 0.85))
+        {
+            detectedCount++;
+        }
+    }
+
+    Equal(
+        7,
+        detectedCount,
+        "The reduced-font cycle must safely reject only the ambiguous destination.");
+}
+
 static bool AssertSyntheticCallOcrExtraction(
     TesseractOcrRegionReader reader,
     SyntheticCallCase testCase,
@@ -1180,7 +1349,8 @@ static bool AssertSyntheticCallOcrExtraction(
     byte noiseAmplitude = 0,
     int averagingBlockSize = 1,
     bool allowSafeRejection = false,
-    bool wrapNameAcrossTwoLines = false)
+    bool wrapNameAcrossTwoLines = false,
+    double fontScale = 1)
 {
     var fixture = SyntheticCallOcrFixture(
         testCase,
@@ -1188,7 +1358,8 @@ static bool AssertSyntheticCallOcrExtraction(
         lightestIntensity,
         noiseAmplitude,
         averagingBlockSize,
-        wrapNameAcrossTwoLines);
+        wrapNameAcrossTwoLines,
+        fontScale);
     var extracted = new CallRegionTextExtractor(fixture.Layout, reader)
         .ExtractCall(new CapturedFrame(fixture.Frame, Ms(6_000)));
 
@@ -1691,8 +1862,14 @@ static (CallRegionLayout Layout, Rgb24Frame Frame) SyntheticCallOcrFixture(
     byte lightestIntensity = 255,
     byte noiseAmplitude = 0,
     int averagingBlockSize = 1,
-    bool wrapNameAcrossTwoLines = false)
+    bool wrapNameAcrossTwoLines = false,
+    double fontScale = 1)
 {
+    if (!double.IsFinite(fontScale) || fontScale <= 0)
+    {
+        throw new ArgumentOutOfRangeException(nameof(fontScale));
+    }
+
     const int frameWidth = 1_920;
     const int frameHeight = 430;
     var layout = new CallRegionLayout(
@@ -1714,7 +1891,7 @@ static (CallRegionLayout Layout, Rgb24Frame Frame) SyntheticCallOcrFixture(
         testCase.Id,
         OcrFieldKind.Sector,
         testCase.Sector,
-        fontSize: 52);
+        fontSize: 52 * fontScale);
     BlitSyntheticOcrField(
         pixels,
         frameWidth,
@@ -1724,7 +1901,7 @@ static (CallRegionLayout Layout, Rgb24Frame Frame) SyntheticCallOcrFixture(
         wrapNameAcrossTwoLines
             ? WrapTextAcrossTwoLines(testCase.Name)
             : testCase.Name,
-        fontSize: 44);
+        fontSize: 44 * fontScale);
     BlitSyntheticOcrField(
         pixels,
         frameWidth,
@@ -1732,7 +1909,7 @@ static (CallRegionLayout Layout, Rgb24Frame Frame) SyntheticCallOcrFixture(
         testCase.Id,
         OcrFieldKind.Password,
         testCase.Password,
-        fontSize: 64);
+        fontSize: 64 * fontScale);
     BlitSyntheticOcrField(
         pixels,
         frameWidth,
@@ -1740,7 +1917,7 @@ static (CallRegionLayout Layout, Rgb24Frame Frame) SyntheticCallOcrFixture(
         testCase.Id,
         OcrFieldKind.Destination,
         testCase.Destination,
-        fontSize: 48);
+        fontSize: 48 * fontScale);
 
     RemapRgbIntensityRange(
         pixels,

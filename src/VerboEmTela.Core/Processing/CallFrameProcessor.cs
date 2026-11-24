@@ -63,6 +63,7 @@ public sealed class CallFrameProcessor
 
         if (sector is null || destination is null || (name is null && password is null))
         {
+            _callDetector.DiscardPendingCandidate();
             return Result(layout, FrameProcessingStatus.IncompleteCall);
         }
 
@@ -99,6 +100,7 @@ public sealed class CallFrameProcessor
         LayoutRecognition layout,
         TimeSpan observedAt)
     {
+        _callDetector.DiscardPendingCandidate();
         _invalidLayoutSince ??= observedAt;
 
         if (!_invalidLayoutConfirmed &&

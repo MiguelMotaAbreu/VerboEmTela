@@ -85,6 +85,11 @@ public sealed class TesseractOcrRegionReader : IOcrRegionReader, IDisposable
                 return ReadNameWithMultilineConsensus(image, frame);
             }
 
+            if (field is OcrFieldKind.Destination)
+            {
+                return ReadDestinationWithCompactCodeConsensus(image, frame);
+            }
+
             using var page = EngineFor(field).Process(
                 image,
                 PageSegmentationFor(field));
@@ -193,6 +198,66 @@ public sealed class TesseractOcrRegionReader : IOcrRegionReader, IDisposable
             value.Split(
                 (char[]?)null,
                 StringSplitOptions.RemoveEmptyEntries));
+    }
+
+    private OcrRegionRead ReadDestinationWithCompactCodeConsensus(
+        global::Tesseract.Pix image,
+        Luminance8Frame frame)
+    {
+        using var linguisticPage = _linguisticEngine.Process(
+            image,
+            global::Tesseract.PageSegMode.SingleLine);
+        var linguisticText = linguisticPage.GetText();
+        var confidence = linguisticPage.GetMeanConfidence();
+
+        if (!HasAdjacentLetterAndDigit(linguisticText))
+        {
+            return new OcrRegionRead(
+                linguisticText,
+                confidence,
+                !string.IsNullOrWhiteSpace(linguisticText) &&
+                TouchesBoundary(linguisticPage, frame));
+        }
+
+        using var verificationPage = _fastEngine.Process(
+            image,
+            global::Tesseract.PageSegMode.SingleLine);
+        var verificationText = verificationPage.GetText();
+        confidence = Math.Min(
+            confidence,
+            verificationPage.GetMeanConfidence());
+
+        if (!string.Equals(
+                NormalizeWhitespace(linguisticText),
+                NormalizeWhitespace(verificationText),
+                StringComparison.Ordinal))
+        {
+            return new OcrRegionRead(null, confidence);
+        }
+
+        return new OcrRegionRead(
+            linguisticText,
+            confidence,
+            !string.IsNullOrWhiteSpace(linguisticText) &&
+            (TouchesBoundary(linguisticPage, frame) ||
+             TouchesBoundary(verificationPage, frame)));
+    }
+
+    private static bool HasAdjacentLetterAndDigit(string value)
+    {
+        for (var index = 1; index < value.Length; index++)
+        {
+            var previous = value[index - 1];
+            var current = value[index];
+
+            if ((char.IsLetter(previous) && char.IsDigit(current)) ||
+                (char.IsDigit(previous) && char.IsLetter(current)))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static bool HasNoTrustworthyContrast(Luminance8Frame frame)

@@ -16,6 +16,11 @@ public sealed class CallDetector
 
     public bool IsArmed => _armed;
 
+    public void DiscardPendingCandidate()
+    {
+        _candidate = null;
+    }
+
     public DetectedCall? Process(PanelObservation observation)
     {
         ArgumentNullException.ThrowIfNull(observation);

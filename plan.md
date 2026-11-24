@@ -109,6 +109,8 @@ Nenhum desses objetos será serializado. Ao pausar, encerrar, perder o painel ou
 - Se uma chamada diferente substituir outra sem retorno ao painel, a troca completa e estável de conteúdo poderá criar novo evento; leituras durante a transição serão descartadas.
 - Nome mais destino nunca será usado isoladamente como identificador único.
 
+**FATO OBSERVADO EM AMBIENTE DE TESTE:** uma chamada produziu a transição `PainelNormal → Chamada em tela cheia → PainelNormal`. Uma rechamada confirmada da mesma pessoa repetiu a transição e acrescentou nova linha idêntica em “Últimas Chamadas”; o histórico confirmou o evento, mas a transição continuou sendo a prova primária.
+
 ### Estabilidade do OCR
 
 Parâmetros iniciais da prova, mantidos configuráveis internamente:
@@ -117,15 +119,19 @@ Parâmetros iniciais da prova, mantidos configuráveis internamente:
 - Pelo menos três observações coerentes em uma janela mínima de 600 ms.
 - Setor e destino devem permanecer associados na mesma composição visual.
 - Valores conflitantes reiniciam a janela de estabilidade.
+- Leitura incompleta ou quadro visual transitório descarta o candidato parcial sem desarmar imediatamente o monitoramento; a estabilidade deve ser reconstruída por inteiro.
 - Pontuação do OCR é apenas sinal auxiliar; nunca é garantia de correção.
 - Texto tocando o limite do recorte, contendo reticências ou caracteres não permitidos é tratado como incompleto.
 - Nome reconhecido em múltiplas linhas exige concordância exata entre os dois modelos locais após apenas colapsar whitespace; divergência descarta o nome.
+- Destino reconhecido com letra e número adjacentes, sem separador, exige concordância exata entre os dois modelos locais; divergência descarta o destino sem inserir espaço automaticamente.
 
 **HIPÓTESE:** durante a prova sintética, leituras de senha com confiança inferior a `0,50` são rejeitadas. O limite separou as leituras corretas observadas (`0,55` a `0,65`) da leitura ambígua reamostrada (`0,29`), mas confiança igual ou superior ao limite não prova correção.
 
 **PENDÊNCIA DE VALIDAÇÃO:** recalibrar ou confirmar o limite de confiança de senha com evidência anonimizada do SoulMV, especialmente uma chamada somente por senha. Até essa validação, o valor permanece provisório e não constitui aceite operacional.
 
-**PENDÊNCIA DE VALIDAÇÃO:** confirmar em evidência anonimizada se e como nomes longos são quebrados no SoulMV. O consenso entre modelos para nomes multilinha foi comprovado apenas em fixtures sintéticas e seu impacto de desempenho deverá ser medido no computador-alvo.
+**FATO OBSERVADO EM AMBIENTE DE TESTE:** o SoulMV exibiu nomes em duas e três linhas. Depois de corrigir as margens de recorte e aguardar 600 ms, setor, nome multilinha e destino permaneceram idênticos em 5 de 5 quadros, processados somente em memória.
+
+**PENDÊNCIA DE VALIDAÇÃO:** repetir a calibração no computador-alvo de 1920×1080 e confirmar sua escala efetiva. O ensaio observado ocorreu em um computador de teste com 1920×1200 e escala de 125%; ele comprova a abordagem, mas não transfere automaticamente a geometria. A fixture com fontes reduzidas a 85% produziu uma perda segura de destino, portanto variações não calibradas continuam fora da condição operacional aceita.
 
 ### Identificação e frase
 
