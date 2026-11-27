@@ -1,8 +1,10 @@
+using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
 using System.IO;
 using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using VerboEmTela.Core.Announcements;
 using VerboEmTela.Core.Application;
 using VerboEmTela.Core.Detection;
 using VerboEmTela.Core.Frames;
@@ -12,12 +14,35 @@ using VerboEmTela.Core.Ocr;
 using VerboEmTela.Core.Processing;
 using VerboEmTela.Core.Specs.TestData;
 using VerboEmTela.Ocr.Tesseract;
+using VerboEmTela.Speech.SherpaOnnx;
 using VerboEmTela.Windows.Application;
 using VerboEmTela.Windows.Capture;
 using VerboEmTela.Windows.Configuration;
 
+if (args is ["--compare-windows-ocr"])
+{
+#if COMPARE_WINDOWS_OCR
+    return CompareWindowsOcr();
+#else
+    Console.Error.WriteLine("Build the specs with -p:CompareWindowsOcr=true to run the comparison.");
+    return 2;
+#endif
+}
+
+if (args is ["--synthesize-faber", var modelDirectory])
+{
+    VerifyFaberSynthesis(modelDirectory);
+    return 0;
+}
+
 var specifications = new (string Name, Action Run)[]
 {
+    ("refuses an incomplete local Faber voice package", RejectsIncompleteFaberPackage),
+    ("formats a named call with its literal destination", FormatsNamedCallUtterance),
+    ("spells out each password character and preserves leading zeroes", FormatsPasswordCallUtterance),
+    ("refuses an incomplete call or a malformed password", RejectsIncompleteUtterance),
+    ("uses a destination pronunciation only for an exact normalized match", FormatsMappedDestination),
+    ("rejects invalid or duplicate destination mappings", RejectsInvalidDestinationMappings),
     ("does not announce content already visible at startup", DoesNotAnnounceVisibleContentAtStartup),
     ("emits one event after a stable full-screen call", EmitsAfterStableFullScreenCall),
     ("does not duplicate an event while the call remains visible", DoesNotDuplicateWhileCallRemainsVisible),
@@ -69,6 +94,10 @@ var specifications = new (string Name, Action Run)[]
     ("extracts one block-resampled call category cycle with packaged OCR", ExtractsBlockResampledCallCategoryCycleWithPackagedOcr),
     ("extracts one wrapped-name call category cycle with packaged OCR", ExtractsWrappedNameCallCategoryCycleWithPackagedOcr),
     ("extracts one reduced-font call category cycle with packaged OCR", ExtractsReducedFontCallCategoryCycleWithPackagedOcr),
+    ("extracts one three-line-name call category cycle with packaged OCR", ExtractsThreeLineNameCallCategoryCycleWithPackagedOcr),
+    ("extracts one position-shifted call category cycle with packaged OCR", ExtractsPositionShiftedCallCategoryCycleWithPackagedOcr),
+    ("extracts one enlarged-font call category cycle with packaged OCR", ExtractsEnlargedFontCallCategoryCycleWithPackagedOcr),
+    ("processes one temporally jittered call category cycle with packaged OCR", ProcessesTemporallyJitteredCallCategoryCycleWithPackagedOcr),
     ("extracts one associated synthetic call with packaged OCR profiles", ExtractsAssociatedSyntheticCallWithPackagedOcrProfiles),
     ("emits one stable call from packaged OCR profiles", EmitsStableCallFromPackagedOcrProfiles),
     ("emits one stable password-only call from packaged OCR profiles", EmitsStablePasswordOnlyCallFromPackagedOcrProfiles),
@@ -1081,6 +1110,218 @@ static void DoesNotExposeRejectedOcrFieldText()
     Equal("CONSULT. 03", extracted.Destination!, "Valid destination must be preserved.");
 }
 
+#if COMPARE_WINDOWS_OCR
+static int CompareWindowsOcr()
+{
+    var windows = WindowsOcrRegionReader.TryCreate();
+    if (windows is null)
+    {
+        Console.Error.WriteLine("Windows OCR pt-BR is unavailable in this environment.");
+        return 2;
+    }
+
+    using var tesseract = new TesseractOcrRegionReader(
+        Path.Combine(AppContext.BaseDirectory, "tessdata"),
+        Path.Combine(AppContext.BaseDirectory, "tessdata_best"));
+    var cases = SyntheticOcrMatrix.Create();
+    var destination = cases.Single(testCase => testCase.Id == "OCR-006");
+    var probes = cases.Select(testCase => (Case: testCase, ExpectText: true))
+        .Append((destination with { Id = "OCR-CLIPPED", Left = -12 }, false))
+        .Append((destination with { Id = "OCR-BLANK", RenderedText = string.Empty }, false));
+
+    var mismatches = 0;
+    Console.WriteLine("Case | Tesseract pt | Windows OCR pt-BR");
+    foreach (var (testCase, expectText) in probes)
+    {
+        CompareRead(
+            testCase.Id,
+            testCase.Field,
+            RenderSyntheticText(testCase),
+            expectText ? testCase.ExpectedText : null);
+    }
+
+    var unstablePassword = SyntheticCallMatrix.Create().Single(testCase => testCase.Id == "SYN-092");
+    var sample = 0;
+    foreach (var (layout, frame) in TemporallyJitteredOcrFixtures(unstablePassword))
+    {
+        sample++;
+        CompareRead(
+            $"SYN-092-{sample}",
+            OcrFieldKind.Password,
+            Rgb24LuminanceConverter.Convert(frame.Crop(layout.Password)),
+            unstablePassword.Password);
+    }
+
+    return mismatches == 0 ? 0 : 1;
+
+    void CompareRead(string id, OcrFieldKind field, Luminance8Frame frame, string? expected)
+    {
+        var baseline = ScoreRead(tesseract, field, frame, expected);
+        var candidate = ScoreRead(windows, field, frame, expected);
+        if (baseline == "incorrect" || candidate == "incorrect")
+        {
+            mismatches++;
+        }
+
+        Console.WriteLine($"{id} | {baseline} | {candidate}");
+    }
+}
+
+static string ScoreRead(
+    IOcrRegionReader reader,
+    OcrFieldKind field,
+    Luminance8Frame frame,
+    string? expected)
+{
+    var result = OcrTextNormalizer.Normalize(field, reader.Read(field, frame));
+    if (!result.IsAccepted)
+    {
+        return $"rejected ({result.RejectionReason})";
+    }
+
+    return string.Equals(result.Text, expected, StringComparison.Ordinal)
+        ? "exact"
+        : "incorrect";
+}
+#endif
+
+static void RejectsIncompleteFaberPackage()
+{
+    Throws<FileNotFoundException>(
+        () => new FaberSpeechEngine(AppContext.BaseDirectory),
+        "A missing local model must fail before invoking the native engine.");
+}
+
+static void VerifyFaberSynthesis(string modelDirectory)
+{
+    var utterance = CallUtteranceFormatter.Format(new DetectedCall(
+        "ATENDIMENTO MÉDICO",
+        IdentityKind.Name,
+        "Pessoa Fictícia Teste",
+        "sala extra",
+        TimeSpan.Zero));
+    var elapsed = Stopwatch.StartNew();
+    using var speech = new FaberSpeechEngine(modelDirectory);
+    var initialization = elapsed.Elapsed;
+    elapsed.Restart();
+    var audio = speech.Synthesize(utterance);
+    elapsed.Stop();
+
+    Equal(22_050, audio.SampleRate, "The Faber model must return its native sample rate.");
+    True(audio.Samples.Length > 0, "Synthesis must produce samples.");
+    var peak = 0f;
+    foreach (var sample in audio.Samples.Span)
+    {
+        if (!float.IsFinite(sample))
+        {
+            throw new InvalidOperationException("Synthesis returned a non-finite sample.");
+        }
+
+        peak = Math.Max(peak, Math.Abs(sample));
+    }
+
+    True(peak > 0.001f, "The synthesized phrase must not be silent.");
+    var duration = audio.Samples.Length / (double)audio.SampleRate;
+    Console.WriteLine(
+        $"PASS Faber: {audio.SampleRate} Hz, {duration:F2} s, " +
+        $"initialization {initialization.TotalMilliseconds:F0} ms, " +
+        $"synthesis {elapsed.Elapsed.TotalMilliseconds:F0} ms.");
+}
+
+static void FormatsNamedCallUtterance()
+{
+    var call = new DetectedCall(
+        "CADASTRO",
+        IdentityKind.Name,
+        "  PESSOA FICTÍCIA TESTE  ",
+        "  SALA DE OBSERVAÇÃO.  ",
+        TimeSpan.Zero);
+
+    Equal(
+        "PESSOA FICTÍCIA TESTE, dirija-se para SALA DE OBSERVAÇÃO.",
+        CallUtteranceFormatter.Format(call),
+        "Named calls must preserve the destination and the name's accents.");
+}
+
+static void FormatsPasswordCallUtterance()
+{
+    var call = new DetectedCall(
+        "CLASSIFICAÇÃO",
+        IdentityKind.Password,
+        "tST001",
+        "SALA 1",
+        TimeSpan.Zero);
+
+    Equal(
+        "tê, esse, tê, zero, zero, um, dirija-se para SALA 1.",
+        CallUtteranceFormatter.Format(call),
+        "Each password character must be spelled separately.");
+}
+
+static void RejectsIncompleteUtterance()
+{
+    var call = new DetectedCall(
+        "CLASSIFICAÇÃO",
+        IdentityKind.Password,
+        "TST001",
+        "SALA 1",
+        TimeSpan.Zero);
+
+    Throws<ArgumentException>(
+        () => CallUtteranceFormatter.Format(call with { Destination = " " }),
+        "A call without a destination must not produce a phrase.");
+    Throws<ArgumentException>(
+        () => CallUtteranceFormatter.Format(call with { Identity = "" }),
+        "A call without an identity must not produce a phrase.");
+    Throws<ArgumentException>(
+        () => CallUtteranceFormatter.Format(call with { Identity = "TST-001" }),
+        "A malformed password must not produce a phrase.");
+}
+
+static void FormatsMappedDestination()
+{
+    var pronunciations = new DestinationPronunciationMap(new Dictionary<string, string>
+    {
+        ["GUICHÊ 03"] = "guichê três",
+    });
+    var call = new DetectedCall(
+        "CADASTRO",
+        IdentityKind.Name,
+        "PESSOA FICTÍCIA",
+        "guiche\u0302  03",
+        TimeSpan.Zero);
+
+    Equal(
+        "PESSOA FICTÍCIA, dirija-se para guichê três.",
+        CallUtteranceFormatter.Format(call, pronunciations),
+        "The mapping must match after normalizing case, whitespace and Unicode representation.");
+
+    foreach (var literal in new[] { "GUICHÊ 3", "GUICHE 03", "SALA DE OBSERVAÇÃO" })
+    {
+        Equal(
+            $"PESSOA FICTÍCIA, dirija-se para {literal}.",
+            CallUtteranceFormatter.Format(call with { Destination = literal }, pronunciations),
+            "A destination outside the mapping must be spoken literally.");
+    }
+}
+
+static void RejectsInvalidDestinationMappings()
+{
+    Throws<ArgumentException>(
+        () => new DestinationPronunciationMap(new Dictionary<string, string>
+        {
+            ["GUICHÊ 03"] = "guichê três",
+            [" guichê  03 "] = "guichê quatro",
+        }),
+        "Equivalent keys must be rejected to prevent ambiguous pronunciation.");
+    Throws<ArgumentException>(
+        () => new DestinationPronunciationMap(new Dictionary<string, string> { [" "] = "guichê três" }),
+        "A blank destination key must not be accepted.");
+    Throws<ArgumentException>(
+        () => new DestinationPronunciationMap(new Dictionary<string, string> { ["GUICHÊ 03"] = " " }),
+        "A blank pronunciation must not be accepted.");
+}
+
 static void ReadsSyntheticOcrMatrixWithPackagedProfiles()
 {
     using var reader = new TesseractOcrRegionReader(
@@ -1291,7 +1532,7 @@ static void ExtractsWrappedNameCallCategoryCycleWithPackagedOcr()
                 reader,
                 testCase,
                 allowSafeRejection: true,
-                wrapNameAcrossTwoLines: true))
+                nameLineCount: 2))
         {
             detectedCount++;
         }
@@ -1341,6 +1582,237 @@ static void ExtractsReducedFontCallCategoryCycleWithPackagedOcr()
         "The reduced-font cycle must safely reject only the ambiguous destination.");
 }
 
+static void ExtractsThreeLineNameCallCategoryCycleWithPackagedOcr()
+{
+    var kinds = Enum.GetValues<SyntheticEventKind>();
+    var cases = SyntheticCallMatrix.Create()
+        .Skip(kinds.Length * 6)
+        .Take(kinds.Length)
+        .ToArray();
+
+    Equal(10, cases.Length, "The three-line-name OCR cycle must contain ten cases.");
+    Equal(
+        10,
+        cases.Select(testCase => testCase.Kind).Distinct().Count(),
+        "The three-line-name OCR cycle must cover every synthetic event kind once.");
+    True(
+        cases.Count(testCase => testCase.Name is not null) >= 7,
+        "The three-line-name OCR cycle must exercise multiple named calls.");
+
+    using var reader = new TesseractOcrRegionReader(
+        Path.Combine(AppContext.BaseDirectory, "tessdata"),
+        Path.Combine(AppContext.BaseDirectory, "tessdata_best"));
+
+    var detectedCount = 0;
+
+    foreach (var testCase in cases)
+    {
+        if (AssertSyntheticCallOcrExtraction(
+                reader,
+                testCase,
+                allowSafeRejection: true,
+                nameLineCount: 3))
+        {
+            detectedCount++;
+        }
+    }
+
+    Equal(
+        7,
+        detectedCount,
+        "The three-line-name cycle must safely reject only the ambiguous accented name.");
+}
+
+static void ExtractsPositionShiftedCallCategoryCycleWithPackagedOcr()
+{
+    var kinds = Enum.GetValues<SyntheticEventKind>();
+    var cases = SyntheticCallMatrix.Create()
+        .Skip(kinds.Length * 7)
+        .Take(kinds.Length)
+        .ToArray();
+
+    Equal(10, cases.Length, "The position-shifted OCR cycle must contain ten cases.");
+    Equal(
+        10,
+        cases.Select(testCase => testCase.Kind).Distinct().Count(),
+        "The position-shifted OCR cycle must cover every synthetic event kind once.");
+
+    using var reader = new TesseractOcrRegionReader(
+        Path.Combine(AppContext.BaseDirectory, "tessdata"),
+        Path.Combine(AppContext.BaseDirectory, "tessdata_best"));
+
+    var detectedCount = 0;
+    var safelyRejectedDetectableIds = new List<string>();
+
+    foreach (var testCase in cases)
+    {
+        var detected = AssertSyntheticCallOcrExtraction(
+                reader,
+                testCase,
+                allowSafeRejection: true,
+                textLeft: 34,
+                textTop: 12);
+        if (detected)
+        {
+            detectedCount++;
+        }
+        else if (testCase.ExpectedOutcome is SyntheticExpectedOutcome.Detect)
+        {
+            safelyRejectedDetectableIds.Add(testCase.Id);
+        }
+    }
+
+    Equal(
+        7,
+        detectedCount,
+        "The position-shifted cycle must safely reject only the ambiguous password-only call.");
+    Equal(
+        "SYN-072",
+        string.Join(',', safelyRejectedDetectableIds),
+        "The position-shifted cycle rejected an unexpected detectable case.");
+}
+
+static void ExtractsEnlargedFontCallCategoryCycleWithPackagedOcr()
+{
+    var kinds = Enum.GetValues<SyntheticEventKind>();
+    var cases = SyntheticCallMatrix.Create()
+        .Skip(kinds.Length * 8)
+        .Take(kinds.Length)
+        .ToArray();
+
+    Equal(10, cases.Length, "The enlarged-font OCR cycle must contain ten cases.");
+    Equal(
+        10,
+        cases.Select(testCase => testCase.Kind).Distinct().Count(),
+        "The enlarged-font OCR cycle must cover every synthetic event kind once.");
+
+    using var reader = new TesseractOcrRegionReader(
+        Path.Combine(AppContext.BaseDirectory, "tessdata"),
+        Path.Combine(AppContext.BaseDirectory, "tessdata_best"));
+
+    var detectedCount = 0;
+    var safelyRejectedDetectableIds = new List<string>();
+
+    foreach (var testCase in cases)
+    {
+        var detected = AssertSyntheticCallOcrExtraction(
+            reader,
+            testCase,
+            allowSafeRejection: true,
+            fontScale: 1.15);
+        if (detected)
+        {
+            detectedCount++;
+        }
+        else if (testCase.ExpectedOutcome is SyntheticExpectedOutcome.Detect)
+        {
+            safelyRejectedDetectableIds.Add(testCase.Id);
+        }
+    }
+
+    Equal(
+        7,
+        detectedCount,
+        "The enlarged-font cycle must safely reject only the ambiguous long-name call.");
+    Equal(
+        "SYN-087",
+        string.Join(',', safelyRejectedDetectableIds),
+        "The enlarged-font cycle rejected an unexpected detectable case.");
+}
+
+static void ProcessesTemporallyJitteredCallCategoryCycleWithPackagedOcr()
+{
+    var kinds = Enum.GetValues<SyntheticEventKind>();
+    var cases = SyntheticCallMatrix.Create()
+        .Skip(kinds.Length * 9)
+        .Take(kinds.Length)
+        .ToArray();
+    Equal(10, cases.Length, "The temporally jittered OCR cycle must contain ten cases.");
+    Equal(
+        10,
+        cases.Select(testCase => testCase.Kind).Distinct().Count(),
+        "The temporally jittered OCR cycle must cover every synthetic event kind once.");
+
+    using var reader = new TesseractOcrRegionReader(
+        Path.Combine(AppContext.BaseDirectory, "tessdata"),
+        Path.Combine(AppContext.BaseDirectory, "tessdata_best"));
+    var detectedCount = 0;
+    var safelyRejectedDetectableIds = new List<string>();
+
+    foreach (var testCase in cases)
+    {
+        var fixtures = TemporallyJitteredOcrFixtures(testCase).ToArray();
+        var layoutRecognizer = new FixedPanelLayoutRecognizer(PanelMode.Dashboard);
+        var processor = new CallFrameProcessor(
+            layoutRecognizer,
+            new CallRegionTextExtractor(fixtures[0].Layout, reader));
+
+        _ = processor.Process(fixtures[0].Frame, TimeSpan.Zero);
+        layoutRecognizer.Mode = PanelMode.FullScreenCall;
+        var results = fixtures
+            .Select((fixture, index) => processor.Process(
+                fixture.Frame,
+                Ms(1_000 + (index * 300))))
+            .ToArray();
+        var detectedCalls = results
+            .Where(result => result.DetectedCall is not null)
+            .Select(result => result.DetectedCall!)
+            .ToArray();
+
+        if (testCase.ExpectedOutcome is SyntheticExpectedOutcome.Reject)
+        {
+            Equal(
+                0,
+                detectedCalls.Length,
+                $"{testCase.Id} invalid or incomplete jittered call must remain rejected.");
+            continue;
+        }
+
+        if (detectedCalls.Length == 0)
+        {
+            safelyRejectedDetectableIds.Add(testCase.Id);
+            continue;
+        }
+
+        Equal(
+            1,
+            detectedCalls.Length,
+            $"{testCase.Id} jittered call must emit exactly once.");
+        var detectedCall = detectedCalls[0];
+        Equal(testCase.Sector!, detectedCall.Sector, $"{testCase.Id} jittered sector mismatch.");
+        Equal(
+            testCase.ExpectedIdentityKind!.Value,
+            detectedCall.IdentityKind,
+            $"{testCase.Id} jittered identity kind mismatch.");
+        Equal(
+            testCase.ExpectedIdentity!,
+            detectedCall.Identity,
+            $"{testCase.Id} jittered identity mismatch.");
+        Equal(
+            testCase.Destination!,
+            detectedCall.Destination,
+            $"{testCase.Id} jittered destination mismatch.");
+        detectedCount++;
+    }
+
+    Equal(
+        "SYN-092",
+        string.Join(',', safelyRejectedDetectableIds),
+        "The temporally jittered cycle safely rejected a detectable case.");
+    Equal(
+        7,
+        detectedCount,
+        "The temporally jittered cycle must safely reject only the unstable password-only call.");
+}
+
+static IEnumerable<(CallRegionLayout Layout, Rgb24Frame Frame)> TemporallyJitteredOcrFixtures(
+    SyntheticCallCase testCase)
+{
+    yield return SyntheticCallOcrFixture(testCase, textLeft: 20, textTop: 20);
+    yield return SyntheticCallOcrFixture(testCase, textLeft: 24, textTop: 16);
+    yield return SyntheticCallOcrFixture(testCase, textLeft: 16, textTop: 24);
+}
+
 static bool AssertSyntheticCallOcrExtraction(
     TesseractOcrRegionReader reader,
     SyntheticCallCase testCase,
@@ -1349,8 +1821,10 @@ static bool AssertSyntheticCallOcrExtraction(
     byte noiseAmplitude = 0,
     int averagingBlockSize = 1,
     bool allowSafeRejection = false,
-    bool wrapNameAcrossTwoLines = false,
-    double fontScale = 1)
+    int nameLineCount = 1,
+    double fontScale = 1,
+    double textLeft = 20,
+    double textTop = 20)
 {
     var fixture = SyntheticCallOcrFixture(
         testCase,
@@ -1358,8 +1832,10 @@ static bool AssertSyntheticCallOcrExtraction(
         lightestIntensity,
         noiseAmplitude,
         averagingBlockSize,
-        wrapNameAcrossTwoLines,
-        fontScale);
+        nameLineCount,
+        fontScale,
+        textLeft,
+        textTop);
     var extracted = new CallRegionTextExtractor(fixture.Layout, reader)
         .ExtractCall(new CapturedFrame(fixture.Frame, Ms(6_000)));
 
@@ -1862,12 +2338,29 @@ static (CallRegionLayout Layout, Rgb24Frame Frame) SyntheticCallOcrFixture(
     byte lightestIntensity = 255,
     byte noiseAmplitude = 0,
     int averagingBlockSize = 1,
-    bool wrapNameAcrossTwoLines = false,
-    double fontScale = 1)
+    int nameLineCount = 1,
+    double fontScale = 1,
+    double textLeft = 20,
+    double textTop = 20)
 {
     if (!double.IsFinite(fontScale) || fontScale <= 0)
     {
         throw new ArgumentOutOfRangeException(nameof(fontScale));
+    }
+
+    if (nameLineCount is < 1 or > 3)
+    {
+        throw new ArgumentOutOfRangeException(nameof(nameLineCount));
+    }
+
+    if (!double.IsFinite(textLeft))
+    {
+        throw new ArgumentOutOfRangeException(nameof(textLeft));
+    }
+
+    if (!double.IsFinite(textTop))
+    {
+        throw new ArgumentOutOfRangeException(nameof(textTop));
     }
 
     const int frameWidth = 1_920;
@@ -1891,17 +2384,24 @@ static (CallRegionLayout Layout, Rgb24Frame Frame) SyntheticCallOcrFixture(
         testCase.Id,
         OcrFieldKind.Sector,
         testCase.Sector,
-        fontSize: 52 * fontScale);
+        fontSize: 52 * fontScale,
+        textLeft: textLeft,
+        textTop: textTop);
     BlitSyntheticOcrField(
         pixels,
         frameWidth,
         layout.Name,
         testCase.Id,
         OcrFieldKind.Name,
-        wrapNameAcrossTwoLines
-            ? WrapTextAcrossTwoLines(testCase.Name)
-            : testCase.Name,
-        fontSize: 44 * fontScale);
+        nameLineCount switch
+        {
+            2 => WrapTextAcrossTwoLines(testCase.Name),
+            3 => WrapTextAcrossThreeLines(testCase.Name),
+            _ => testCase.Name,
+        },
+        fontSize: 44 * fontScale,
+        textLeft: textLeft,
+        textTop: textTop);
     BlitSyntheticOcrField(
         pixels,
         frameWidth,
@@ -1909,7 +2409,9 @@ static (CallRegionLayout Layout, Rgb24Frame Frame) SyntheticCallOcrFixture(
         testCase.Id,
         OcrFieldKind.Password,
         testCase.Password,
-        fontSize: 64 * fontScale);
+        fontSize: 64 * fontScale,
+        textLeft: textLeft,
+        textTop: textTop);
     BlitSyntheticOcrField(
         pixels,
         frameWidth,
@@ -1917,7 +2419,9 @@ static (CallRegionLayout Layout, Rgb24Frame Frame) SyntheticCallOcrFixture(
         testCase.Id,
         OcrFieldKind.Destination,
         testCase.Destination,
-        fontSize: 48 * fontScale);
+        fontSize: 48 * fontScale,
+        textLeft: textLeft,
+        textTop: textTop);
 
     RemapRgbIntensityRange(
         pixels,
@@ -1966,6 +2470,32 @@ static string? WrapTextAcrossTwoLines(string? text)
     return splitAt < 0
         ? text
         : text[..splitAt] + "\n" + text[(splitAt + 1)..];
+}
+
+static string? WrapTextAcrossThreeLines(string? text)
+{
+    if (text is null)
+    {
+        return null;
+    }
+
+    var words = text.Split(
+        ' ',
+        StringSplitOptions.RemoveEmptyEntries);
+    if (words.Length < 3)
+    {
+        return text;
+    }
+
+    var firstLineWordCount = (words.Length + 2) / 3;
+    var remainingWordCount = words.Length - firstLineWordCount;
+    var secondLineWordCount = (remainingWordCount + 1) / 2;
+
+    return string.Join(' ', words.Take(firstLineWordCount)) + "\n" +
+           string.Join(' ', words
+               .Skip(firstLineWordCount)
+               .Take(secondLineWordCount)) + "\n" +
+           string.Join(' ', words.Skip(firstLineWordCount + secondLineWordCount));
 }
 
 static void ApplyBlockAveraging(
@@ -2112,7 +2642,9 @@ static void BlitSyntheticOcrField(
     string caseId,
     OcrFieldKind field,
     string? text,
-    double fontSize)
+    double fontSize,
+    double textLeft,
+    double textTop)
 {
     var renderedText = text ?? string.Empty;
     var rendered = RenderSyntheticText(new SyntheticOcrCase(
@@ -2122,7 +2654,9 @@ static void BlitSyntheticOcrField(
         renderedText,
         destinationRegion.Width,
         destinationRegion.Height,
-        fontSize));
+        fontSize,
+        Left: textLeft,
+        Top: textTop));
 
     BlitLuminanceRegion(
         destinationPixels,

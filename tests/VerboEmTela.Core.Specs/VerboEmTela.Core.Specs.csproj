@@ -7,9 +7,19 @@
     <RootNamespace>VerboEmTela.Core.Specs</RootNamespace>
   </PropertyGroup>
 
+  <PropertyGroup Condition="'$(CompareWindowsOcr)' == 'true'">
+    <TargetFramework>net10.0-windows10.0.26100.0</TargetFramework>
+    <DefineConstants>$(DefineConstants);COMPARE_WINDOWS_OCR</DefineConstants>
+  </PropertyGroup>
+
+  <ItemGroup Condition="'$(CompareWindowsOcr)' != 'true'">
+    <Compile Remove="TestData/WindowsOcrRegionReader.cs" />
+  </ItemGroup>
+
   <ItemGroup>
     <ProjectReference Include="../../src/VerboEmTela.Core/VerboEmTela.Core.csproj" />
     <ProjectReference Include="../../src/VerboEmTela.Ocr.Tesseract/VerboEmTela.Ocr.Tesseract.csproj" />
+    <ProjectReference Include="../../src/VerboEmTela.Speech.SherpaOnnx/VerboEmTela.Speech.SherpaOnnx.csproj" />
     <ProjectReference Include="../../src/VerboEmTela.Windows/VerboEmTela.Windows.csproj" />
   </ItemGroup>
 

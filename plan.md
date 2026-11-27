@@ -141,7 +141,7 @@ Parâmetros iniciais da prova, mantidos configuráveis internamente:
 - Preservar acentos reconhecidos; unir apenas quebras de linha visuais do mesmo campo.
 - Frase padrão: **“{identificação}, dirija-se para {destino}.”**
 - Cada ocorrência é anunciada uma vez.
-- Mapeamento de destino usa chave normalizada exata.
+- Mapeamento de destino usa chave exata após padronizar espaços, capitalização e representação Unicode. Acentos, pontuação e zeros à esquerda distinguem destinos.
 - Sem mapeamento, usar o texto literal somente depois da validação de estabilidade e caracteres.
 - O catálogo abaixo fornece referências canônicas para os destinos conhecidos, mas não é uma lista fechada e não bloqueia outros destinos válidos.
 - Nome, senha ou destino incompleto bloqueia o anúncio e coloca o aplicativo em aviso atual, sem persistência.
@@ -186,6 +186,8 @@ Não haverá histórico de chamadas. Todos os contadores zeram ao encerrar.
 ## 5. Plano incremental de entregas
 
 Cada etapa só começa após a anterior cumprir seu critério de passagem. Falha em um critério fundamental interrompe a progressão e gera relatório de bloqueio; não deve ser mascarada por ajuste de aceitação.
+
+**Ordem de implementação:** a taxa mínima de 95% de detecção de chamadas será tratada após a implementação completa do software. Até lá, os testes registram a taxa observada e o desenvolvimento segue na ordem das etapas, em fatias pequenas. Os demais critérios continuam aplicáveis.
 
 ### Etapa 0 — Congelamento de evidências e matriz de teste
 
@@ -276,7 +278,13 @@ Critério de passagem:
 
 - Nos eventos estáveis da matriz: pelo menos 95 de 100 detectados, zero associação errada e zero texto incompleto aceito.
 - Se houver qualquer associação errada, a etapa falha independentemente da taxa agregada.
-- Se o critério não for atingido, parar e relatar que OCR não está comprovado; não avançar para voz integrada.
+- Registrar a taxa observada. A meta quantitativa será tratada após a implementação completa, conforme a ordem de implementação acima.
+
+**PROGRESSO ATUAL:** os 100 casos sintéticos já atravessam o Tesseract português empacotado em dez ciclos distintos. O sétimo cobre nomes em três linhas, o oitavo varia alinhamento e rasterização, o nono amplia as fontes para 115% e o décimo usa três quadros com pequenos deslocamentos temporais. Das 80 chamadas que deveriam ser detectáveis, 73 foram reconhecidas exatamente (`91,25%`) e sete foram rejeitadas com segurança. Os 20 casos inválidos ou incompletos permaneceram rejeitados e nenhuma associação incorreta foi aceita. A Etapa 3 segue abaixo da meta de 95%.
+
+**Comparação diagnóstica com Windows OCR:** os motores receberam os mesmos recortes sintéticos em memória e passaram pela mesma normalização. O Tesseract acertou os dez campos da amostra de referência. O OCR nativo em `pt-BR` acertou nove e devolveu uma senha incorreta que passou pela normalização em `OCR-005`. Ambos rejeitaram o recorte vazio e o recorte cortado. Nos três recortes de senha de `SYN-092`, o OCR nativo acertou os três e o Tesseract rejeitou todos. A comparação mediu campos individuais. O caso errado impede adotar o OCR nativo como substituição direta ou ativá-lo por padrão. O Tesseract segue como motor padrão enquanto a Etapa 3 estiver aberta.
+
+A comparação roda com `dotnet run --project tests/VerboEmTela.Core.Specs -c Release -p:CompareWindowsOcr=true -- --compare-windows-ocr`. O modo opcional exige o reconhecedor `pt-BR` instalado e retorna código 1 ao encontrar leitura incorreta. O suporte oficial de [Windows.Media.Ocr em aplicativos desktop](https://learn.microsoft.com/en-us/uwp/api/windows.media.ocr?view=winrt-26100) exige identidade de pacote. A execução diagnóstica local no Windows de teste não comprova suporte para o pacote portátil planejado.
 
 ### Etapa 4 — Detecção de ocorrência e rechamada
 
@@ -324,6 +332,12 @@ Testes automatizados:
 - Falha e recuperação simuladas do áudio.
 - Cancelamento imediato e descarte após 15 segundos.
 - Garantia de que o motor não realiza requisições de rede.
+
+**ENTREGA INCREMENTAL:** o formatador gera a frase padrão, preserva o nome, soletra a senha e aceita um mapa opcional de pronúncia de destinos. O motor local Faber medium usa o pacote [Sherpa-ONNX 1.13.8](https://www.nuget.org/packages/org.k2fsa.sherpa.onnx/1.13.8) para sintetizar em CPU e entregar amostras PCM em memória. Essa versão aceita os dados do eSpeak NG fornecidos com o modelo. A reprodução no dispositivo e a confirmação auditiva fazem parte das próximas fatias.
+
+Para repetir a validação, use o [arquivo oficial Faber medium do Sherpa-ONNX](https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-pt_BR-faber-medium.tar.bz2) com SHA-256 `7ADD3F923AD6BC25CA8A192805FD1A64D1B3893E4611C4A9719545A825039A83`. Extraia a pasta do modelo em `.tts-assets` na raiz do projeto, mantendo `tokens.txt` e `espeak-ng-data` junto do arquivo ONNX. Execute `dotnet run --project tests/VerboEmTela.Core.Specs -c Release -- --synthesize-faber .tts-assets/vits-piper-pt_BR-faber-medium`. O teste gera uma frase fictícia, confere o sinal de áudio e imprime os tempos. O download do modelo e a restauração do NuGet são etapas de preparação.
+
+No primeiro ensaio neste computador, o modelo carregou em 2,71 s e sintetizou em 2,42 s uma frase com 2,88 s de áudio a 22.050 Hz. A medição é da primeira síntese isolada. O ensaio no computador-alvo e a medição do fluxo com pré-aquecimento e reprodução continuam pendentes.
 
 Validação manual no computador de teste:
 

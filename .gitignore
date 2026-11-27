@@ -1,5 +1,6 @@
 .dotnet-cli/
 .appdata/
 .nuget/
+.tts-assets/
 bin/
 obj/
