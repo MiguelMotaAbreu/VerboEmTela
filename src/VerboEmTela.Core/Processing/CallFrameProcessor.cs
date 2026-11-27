@@ -28,12 +28,16 @@ public sealed class CallFrameProcessor
         _options.Validate();
     }
 
-    public FrameProcessingResult Process(Rgb24Frame frame, TimeSpan observedAt)
+    public FrameProcessingResult Process(Rgb24Frame frame, TimeSpan observedAt) =>
+        Process(new CapturedFrame(frame, observedAt));
+
+    public FrameProcessingResult Process(CapturedFrame capturedFrame)
     {
-        ArgumentNullException.ThrowIfNull(frame);
+        ArgumentNullException.ThrowIfNull(capturedFrame);
+        var observedAt = capturedFrame.ObservedAt;
         EnsureMonotonicTime(observedAt);
 
-        var layout = _layoutRecognizer.Recognize(frame);
+        var layout = _layoutRecognizer.Recognize(capturedFrame.Frame);
 
         if (layout.Mode is PanelMode.Invalid)
         {
@@ -54,8 +58,7 @@ public sealed class CallFrameProcessor
             return Result(layout, FrameProcessingStatus.IgnoredUntilDashboard);
         }
 
-        var extraction = _textExtractor.ExtractCall(
-            new CapturedFrame(frame, observedAt));
+        var extraction = _textExtractor.ExtractCall(capturedFrame);
         var sector = Clean(extraction.Sector);
         var destination = Clean(extraction.Destination);
         var name = Clean(extraction.Name);
@@ -63,7 +66,7 @@ public sealed class CallFrameProcessor
 
         if (sector is null || destination is null || (name is null && password is null))
         {
-            _callDetector.DiscardPendingCandidate();
+            _callDetector.ObserveIncompleteFullScreen(observedAt, capturedFrame.Timestamp);
             return Result(layout, FrameProcessingStatus.IncompleteCall);
         }
 
@@ -78,7 +81,8 @@ public sealed class CallFrameProcessor
                 sector,
                 identityKind,
                 identity,
-                destination));
+                destination),
+            capturedFrame.Timestamp);
 
         return new FrameProcessingResult(
             layout.Mode,

@@ -4,7 +4,7 @@ namespace VerboEmTela.Core.Frames;
 
 public sealed record CapturedFrame
 {
-    public CapturedFrame(Rgb24Frame frame, TimeSpan observedAt)
+    public CapturedFrame(Rgb24Frame frame, TimeSpan observedAt, MonotonicTimestamp? timestamp = null)
     {
         Frame = frame ?? throw new ArgumentNullException(nameof(frame));
 
@@ -16,9 +16,12 @@ public sealed record CapturedFrame
         }
 
         ObservedAt = observedAt;
+        Timestamp = timestamp;
     }
 
     public Rgb24Frame Frame { get; }
 
     public TimeSpan ObservedAt { get; }
+
+    public MonotonicTimestamp? Timestamp { get; }
 }

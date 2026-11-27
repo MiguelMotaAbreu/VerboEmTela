@@ -162,7 +162,7 @@ O catálogo registra as combinações conhecidas entre o campo do painel e o des
 - O atraso inicial será ajustado na prova para que a voz comece depois do som nativo.
 - Meta: início da voz até 2 segundos após o fim do som nativo em pelo menos 95% dos eventos medidos.
 - A fila é FIFO e cada item expira 15 segundos após sua detecção.
-- Se o áudio falhar, tentar recuperar enquanto o item for válido; ao expirar, descartá-lo.
+- Se o dispositivo estiver indisponível na abertura, tentar novamente dentro da validade. Se a falha ocorrer após o início da reprodução, informar o erro ao chamador para evitar repetir uma fala que pode ter sido ouvida em parte.
 - Ao iniciar, retomar ou recuperar o painel, ignorar o conteúdo já existente e aguardar nova transição.
 - Ao perder o painel, pausar anúncios, interromper a voz e limpar a fila.
 - Rearmar em até 10 segundos depois de reconhecer o painel válido e estável.
@@ -333,11 +333,21 @@ Testes automatizados:
 - Cancelamento imediato e descarte após 15 segundos.
 - Garantia de que o motor não realiza requisições de rede.
 
-**ENTREGA INCREMENTAL:** o formatador gera a frase padrão, preserva o nome, soletra a senha e aceita um mapa opcional de pronúncia de destinos. O motor local Faber medium usa o pacote [Sherpa-ONNX 1.13.8](https://www.nuget.org/packages/org.k2fsa.sherpa.onnx/1.13.8) para sintetizar em CPU e entregar amostras PCM em memória. Essa versão aceita os dados do eSpeak NG fornecidos com o modelo. A reprodução no dispositivo e a confirmação auditiva fazem parte das próximas fatias.
+**ENTREGA INCREMENTAL:** o formatador gera a frase padrão, preserva o nome, soletra a senha e aceita um mapa opcional de pronúncia de destinos. O motor local Faber medium usa o pacote [Sherpa-ONNX 1.13.8](https://www.nuget.org/packages/org.k2fsa.sherpa.onnx/1.13.8) para sintetizar em CPU e entregar amostras PCM em memória. Essa versão aceita os dados do eSpeak NG fornecidos com o modelo.
 
 Para repetir a validação, use o [arquivo oficial Faber medium do Sherpa-ONNX](https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-pt_BR-faber-medium.tar.bz2) com SHA-256 `7ADD3F923AD6BC25CA8A192805FD1A64D1B3893E4611C4A9719545A825039A83`. Extraia a pasta do modelo em `.tts-assets` na raiz do projeto, mantendo `tokens.txt` e `espeak-ng-data` junto do arquivo ONNX. Execute `dotnet run --project tests/VerboEmTela.Core.Specs -c Release -- --synthesize-faber .tts-assets/vits-piper-pt_BR-faber-medium`. O teste gera uma frase fictícia, confere o sinal de áudio e imprime os tempos. O download do modelo e a restauração do NuGet são etapas de preparação.
 
-No primeiro ensaio neste computador, o modelo carregou em 2,71 s e sintetizou em 2,42 s uma frase com 2,88 s de áudio a 22.050 Hz. A medição é da primeira síntese isolada. O ensaio no computador-alvo e a medição do fluxo com pré-aquecimento e reprodução continuam pendentes.
+O Faber já oferece pré-aquecimento explícito. A integração poderá executá-lo antes de habilitar a voz. O motor sintetiza uma frase fictícia uma vez por instância, descarta o áudio e aceita novas chamadas de aquecimento sem repetir a síntese. Para medir esse caminho no teste isolado, troque `--synthesize-faber` por `--warm-up-faber` no comando anterior.
+
+No primeiro ensaio, o modelo carregou em 2,71 s e a síntese levou 2,42 s. Em uma rodada posterior com dois processos novos e a mesma frase de teste, a síntese levou 444 ms sem pré-aquecimento e 321 ms após um pré-aquecimento de 318 ms. São medições isoladas neste computador. O ensaio com reprodução e o desempenho no computador-alvo ainda precisam ser medidos.
+
+O motor já aceita um multiplicador de velocidade entre 0,5× e 2×, com padrão de 1×. O ajuste ocorre durante a síntese e preserva a taxa de amostragem. No teste isolado com `--warm-up-faber`, a mesma frase durou 3,41 s a 0,75×, 2,91 s a 1× e 2,57 s a 1,25×. A escolha auditiva do ritmo e o volume serão avaliados com a reprodução.
+
+O adaptador de reprodução usa o dispositivo padrão do Windows via [NAudio.WinMM 2.4.0](https://www.nuget.org/packages/NAudio.WinMM/2.4.0), com áudio mono PCM16 em memória. O cancelamento aguarda o dispositivo confirmar a parada antes de liberar os recursos. Uma falha ao abrir ou usar o dispositivo é devolvida ao chamador, que pode tentar uma nova reprodução. Use `dotnet run --project tests/VerboEmTela.Core.Specs -c Release -- --check-audio-device` para verificar o dispositivo com silêncio. Para ouvir a frase fictícia, use `--play-faber .tts-assets/vits-piper-pt_BR-faber-medium` no lugar de `--check-audio-device`. O comando de voz é isolado do painel e pode ser interrompido com Ctrl+C.
+
+O volume do anúncio é aplicado às amostras em memória durante a reprodução. A faixa vai de 0% (silêncio) a 100% (amplitude original e valor padrão), preservando o volume do Windows. Acrescente `--volume 50` ao comando `--play-faber` para testar metade da amplitude. A confirmação auditiva do nível apropriado fica para o ensaio no ambiente-alvo.
+
+O fluxo isolado de voz aplica a validade de 15 s antes de sintetizar e novamente antes de entregar as amostras à saída. O relógio monotônico mede o prazo desde o instante de detecção informado pelo chamador. Se o prazo vencer ou houver cancelamento durante a síntese síncrona, as amostras são descartadas quando o motor retorna. O comando `--play-faber` já usa essa proteção com uma chamada fictícia.
 
 Validação manual no computador de teste:
 
@@ -361,6 +371,16 @@ Entregas:
 - Inicialização automática na sessão do usuário por atalho na pasta Inicializar; não usar serviço Windows.
 - Perfil `Teste`, com áudio fictício, e perfil `Produção`, sem teste de áudio.
 - Mutex de instância única.
+
+**ENTREGA INCREMENTAL:** a fila FIFO em memória tem capacidade definida na criação. Ao inserir ou retirar um item, remove os que completaram 15 s desde a detecção. Quando todos os espaços estão ocupados por itens válidos, uma nova entrada é recusada e a ordem das anteriores é preservada. A operação de limpeza já existe para ser chamada futuramente ao pausar, perder o painel ou encerrar.
+
+O consumidor da fila entrega um anúncio por vez ao fluxo de voz usando o mesmo relógio da fila. Durante a reprodução ou retentativa, uma nova tentativa de consumo retorna ocupado e preserva os itens pendentes. Se a abertura falhar com um código de dispositivo inválido, ocupado ou sem driver, o fluxo reutiliza o PCM já sintetizado e tenta novamente a cada 500 ms, limitado ao tempo restante e sujeito a cancelamento. Os demais erros chegam ao chamador. A classificação usa os retornos documentados de [waveOutOpen](https://learn.microsoft.com/en-us/windows/win32/api/mmeapi/nf-mmeapi-waveoutopen). O comando `--play-faber` exercita esse percurso com uma frase fictícia. O acionamento contínuo pelo painel e a limpeza vinculada ao estado do aplicativo continuam pendentes.
+
+O consumidor aceita um atraso mínimo contado desde o início visual informado na fila. O tempo já usado na detecção, na espera e na síntese reduz o que falta aguardar. A validade continua sendo de 15 s desde a detecção confirmada. Uma espera que só permitiria falar no vencimento ou depois dele faz o item ser descartado. O atraso padrão é zero no teste isolado. Para experimentar, acrescente `--delay-ms 1500` ao comando `--play-faber`.
+
+O pipeline agora expõe o primeiro quadro visual associado à chamada separadamente do instante de confirmação pelo OCR. Um quadro inicial em tela cheia com leitura incompleta pode marcar a aparição. Uma troca de conteúdo completo, um retorno ao painel normal ou uma perda confirmada do painel impede reutilizar a referência anterior em uma nova ocorrência.
+
+A captura de tela preserva as marcas monotônicas dos dois quadros até a fila. A fila usa a primeira aparição como referência para o atraso da voz e a confirmação para contar a validade de 15 segundos. Ela exige as duas marcas no mesmo relógio usado pelo reprodutor. As sequências gravadas continuam disponíveis para validação com tempos relativos. O acionamento contínuo e a calibração com o som nativo no painel seguem pendentes.
 
 Testes automatizados:
 

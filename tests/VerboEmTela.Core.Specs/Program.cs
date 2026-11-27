@@ -1,9 +1,11 @@
+using System.Buffers.Binary;
 using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
 using System.IO;
 using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using NAudio;
 using VerboEmTela.Core.Announcements;
 using VerboEmTela.Core.Application;
 using VerboEmTela.Core.Detection;
@@ -12,10 +14,12 @@ using VerboEmTela.Core.Imaging;
 using VerboEmTela.Core.Layout;
 using VerboEmTela.Core.Ocr;
 using VerboEmTela.Core.Processing;
+using VerboEmTela.Core.Speech;
 using VerboEmTela.Core.Specs.TestData;
 using VerboEmTela.Ocr.Tesseract;
 using VerboEmTela.Speech.SherpaOnnx;
 using VerboEmTela.Windows.Application;
+using VerboEmTela.Windows.Audio;
 using VerboEmTela.Windows.Capture;
 using VerboEmTela.Windows.Configuration;
 
@@ -29,14 +33,53 @@ if (args is ["--compare-windows-ocr"])
 #endif
 }
 
-if (args is ["--synthesize-faber", var modelDirectory])
+if (args is [("--synthesize-faber" or "--warm-up-faber"), var modelDirectory])
 {
-    VerifyFaberSynthesis(modelDirectory);
+    VerifyFaberSynthesis(modelDirectory, warmUp: args[0] == "--warm-up-faber");
+    return 0;
+}
+
+if (args is ["--play-faber", ..])
+{
+    if (!TryReadFaberPlaybackOptions(args, out var volumePercent, out var delayMilliseconds))
+    {
+        Console.Error.WriteLine("Usage: --play-faber <model-directory> [--volume <0-100>] [--delay-ms <milliseconds>]");
+        return 2;
+    }
+
+    PlayFaberPreviewAsync(args[1], volumePercent / 100f, TimeSpan.FromMilliseconds(delayMilliseconds))
+        .GetAwaiter().GetResult();
+    return 0;
+}
+
+if (args is ["--check-audio-device"])
+{
+    VerifyWindowsAudioDeviceAsync().GetAwaiter().GetResult();
     return 0;
 }
 
 var specifications = new (string Name, Action Run)[]
 {
+    ("waits only the remaining delay from visual start before playing", () => WaitsForNativeCallDelayAsync().GetAwaiter().GetResult()),
+    ("discards an announcement if its delayed start reaches expiry", () => ExpiredBeforeScheduledPlaybackAsync().GetAwaiter().GetResult()),
+    ("cancels an announcement before its scheduled start", () => CancelsScheduledPlaybackAsync().GetAwaiter().GetResult()),
+    ("retries an unavailable default audio device with the same synthesized speech", () => RetriesUnavailableAudioDeviceAsync().GetAwaiter().GetResult()),
+    ("stops retrying an unavailable output at the announcement deadline", () => ExpiresDuringAudioDeviceFailureAsync().GetAwaiter().GetResult()),
+    ("cancels an announcement during the audio retry delay", () => CancelsAudioRetryDelayAsync().GetAwaiter().GetResult()),
+    ("plays queued announcements sequentially in insertion order", () => PlaysQueuedAnnouncementsInOrderAsync().GetAwaiter().GetResult()),
+    ("skips announcements that expire while the output is occupied", () => SkipsExpiredQueuedAnnouncementsAsync().GetAwaiter().GetResult()),
+    ("keeps remaining announcements after a playback failure", () => ContinuesQueueAfterPlaybackFailureAsync().GetAwaiter().GetResult()),
+    ("keeps accepted announcements in FIFO order when the queue fills", QueuesAnnouncementsInOrder),
+    ("prunes expired announcements anywhere in the queue at the deadline", PrunesExpiredAnnouncements),
+    ("clears pending announcements and allows new ones", ClearsPendingAnnouncements),
+    ("enforces queue capacity under concurrent submissions", EnforcesConcurrentQueueCapacity),
+    ("discards an announcement at the fifteen-second limit", () => ExpiresBeforeSynthesisAsync().GetAwaiter().GetResult()),
+    ("discards audio that expires during synthesis", () => ExpiresDuringSynthesisAsync().GetAwaiter().GetResult()),
+    ("discards audio when synthesis was canceled", () => CancelsBeforeAnnouncementPlaybackAsync().GetAwaiter().GetResult()),
+    ("stops Windows audio before releasing canceled playback", () => CancelsWindowsPlaybackAsync().GetAwaiter().GetResult()),
+    ("reports Windows audio failures and allows the next playback", () => RecoversWindowsPlaybackAsync().GetAwaiter().GetResult()),
+    ("scales only announcement samples at the requested volume", () => ScalesWindowsPlaybackVolumeAsync().GetAwaiter().GetResult()),
+    ("rejects invalid Windows playback volumes", RejectsInvalidPlaybackVolume),
     ("refuses an incomplete local Faber voice package", RejectsIncompleteFaberPackage),
     ("formats a named call with its literal destination", FormatsNamedCallUtterance),
     ("spells out each password character and preserves leading zeroes", FormatsPasswordCallUtterance),
@@ -70,6 +113,8 @@ var specifications = new (string Name, Action Run)[]
     ("disarms before a call after a long invalid sampling gap", DisarmsBeforeCallAfterLongInvalidGap),
     ("detects an identical recall through the frame pipeline", PipelineDetectsIdenticalRecall),
     ("processes a timed frame sequence in order", () => RunnerProcessesTimedSequence().GetAwaiter().GetResult()),
+    ("preserves capture timestamps from visual onset through enqueue", () => QueuesTimedScreenCall().GetAwaiter().GetResult()),
+    ("rejects queued calls without timestamps from the queue clock", RejectsUnalignedCallTimestamps),
     ("resets processing state after a sequence ends", () => RunnerResetsAfterSequence().GetAwaiter().GetResult()),
     ("rejects an out-of-order frame sequence", RejectsOutOfOrderFrameSequence),
     ("resets processing state when a sequence is cancelled", () => CancelledRunnerResetsState().GetAwaiter().GetResult()),
@@ -215,6 +260,8 @@ static void EmitsDistinctStableReplacement()
 
     Equal(2, events.Count, "A different stable call may replace another full-screen call.");
     Equal("PESSOA B", events[1].Identity, "The replacement event was not emitted.");
+    Equal(Ms(2_000), events[1].VisualStartedAt, "A replacement must use its own first observation.");
+    Equal(Ms(2_600), events[1].DetectedAt, "Detection must still use the stable confirmation time.");
 }
 
 static void RejectsOutOfOrderObservations()
@@ -399,6 +446,8 @@ static void WaitsForCompleteText()
 
     var detected = ProcessStableFrameCall(processor, 1_600);
     NotNull(detected, "Complete frames after a partial reading must still be accepted.");
+    Equal(Ms(1_000), detected.VisualStartedAt, "An initial full-screen frame may mark onset before OCR is complete.");
+    Equal(Ms(2_200), detected.DetectedAt, "Incomplete frames must not advance OCR stability.");
 }
 
 static void RestartsStabilityAfterIncompleteText()
@@ -607,6 +656,8 @@ static void PipelineDetectsIdenticalRecall()
     NotNull(recall, "The identical recall must be detected after the dashboard return.");
     Equal(first.Identity, recall.Identity, "Recall identity mismatch.");
     Equal(first.Destination, recall.Destination, "Recall destination mismatch.");
+    Equal(Ms(1_000), first.VisualStartedAt, "The first call must use the first full-screen frame.");
+    Equal(Ms(3_000), recall.VisualStartedAt, "The dashboard return must reset the visual start even for the same content.");
 }
 
 static async Task RunnerProcessesTimedSequence()
@@ -625,6 +676,70 @@ static async Task RunnerProcessesTimedSequence()
     Equal(4, results.Count, "Every source frame must produce one processing result.");
     Equal(1, calls.Length, "The timed sequence must produce one detected call.");
     Equal("PESSOA TESTE", calls[0].Identity, "Detected identity mismatch.");
+}
+
+static async Task QueuesTimedScreenCall()
+{
+    var clock = new ManualTimestampProvider();
+    clock.Advance(TimeSpan.FromSeconds(43));
+    var captureStartedAt = clock.GetTimestamp();
+    var extractor = CompleteExtractor();
+    var complete = extractor.Result;
+    var dashboard = DashboardFrame();
+    var fullScreen = SyntheticFrame((22, 6, 0.90));
+    var capture = new StubScreenPixelCapture(index =>
+    {
+        clock.Advance(Ms(300));
+        extractor.Result = index == 2 ? complete with { Destination = null } : complete;
+        return index == 1 ? dashboard : fullScreen;
+    });
+    var source = new ScreenFrameSource(capture, new ScreenFrameSourceOptions
+    {
+        Region = new ScreenRegion(0, 0, 192, 108),
+    }, clock);
+    var runner = new FrameProcessingRunner(TestFrameProcessor(extractor));
+    var results = await TakeAsync(runner.RunAsync(source), count: 5);
+
+    Equal(FrameProcessingStatus.IncompleteCall, results[1].Status, "The first call frame must have incomplete OCR.");
+    Equal(1, results.Count(result => result.DetectedCall is not null), "Only the stable call must be detected.");
+    var call = results[4].DetectedCall;
+    NotNull(call, "The final frame must confirm the call after OCR stabilizes.");
+    Equal(Ms(600), call.VisualStartedAt, "The visual start must retain the incomplete frame's relative time.");
+    Equal(Ms(1_500), call.DetectedAt, "Detection must retain the confirming frame's relative time.");
+
+    clock.Advance(TimeSpan.FromSeconds(2));
+    var queue = new AnnouncementQueue(capacity: 1, clock);
+    var pronunciations = new DestinationPronunciationMap(
+        [new KeyValuePair<string, string>("RECEPÇÃO 1", "recepção um")]);
+    Equal(AnnouncementEnqueueResult.Accepted, queue.Enqueue(call, pronunciations), "The queue must accept a call from its clock.");
+    var announcement = queue.Dequeue();
+    NotNull(announcement, "The call must be queued for playback.");
+    Equal("PESSOA TESTE, dirija-se para recepção um.", announcement.Text, "The queue must preserve the destination pronunciation.");
+    Equal(captureStartedAt + Ms(600).Ticks, announcement.VisualStartTimestamp, "The visual timestamp must come from the first call frame.");
+    Equal(captureStartedAt + Ms(1_500).Ticks, announcement.DetectedTimestamp, "The detection timestamp must come from the confirming frame.");
+
+    clock.Advance(TimeSpan.FromSeconds(13));
+    Equal(AnnouncementEnqueueResult.Expired, queue.Enqueue(call), "A call must expire 15 seconds after detection.");
+    True(queue.Dequeue() is null, "The expired call must not reach playback.");
+}
+
+static void RejectsUnalignedCallTimestamps()
+{
+    var clock = new ManualTimestampProvider();
+    var otherClock = new ManualTimestampProvider();
+    var queue = new AnnouncementQueue(capacity: 1, clock);
+    var replay = new DetectedCall("CADASTRO", IdentityKind.Name, "PESSOA TESTE", "RECEPÇÃO 1", TimeSpan.Zero);
+    var validTimestamp = new MonotonicTimestamp(clock, clock.GetTimestamp());
+    var unrelatedTimestamp = new MonotonicTimestamp(otherClock, otherClock.GetTimestamp());
+
+    Throws<ArgumentException>(() => queue.Enqueue(replay), "Relative replay times cannot be used for live announcements.");
+    Throws<ArgumentException>(
+        () => queue.Enqueue(replay with { VisualStartTimestamp = unrelatedTimestamp, DetectionTimestamp = validTimestamp }),
+        "The first frame must come from the queue clock.");
+    Throws<ArgumentException>(
+        () => queue.Enqueue(replay with { VisualStartTimestamp = validTimestamp, DetectionTimestamp = unrelatedTimestamp }),
+        "The confirming frame must come from the queue clock.");
+    True(queue.Dequeue() is null, "Invalid clock metadata must not modify the queue.");
 }
 
 static async Task RunnerResetsAfterSequence()
@@ -1192,17 +1307,570 @@ static void RejectsIncompleteFaberPackage()
         "A missing local model must fail before invoking the native engine.");
 }
 
-static void VerifyFaberSynthesis(string modelDirectory)
+static async Task WaitsForNativeCallDelayAsync()
 {
-    var utterance = CallUtteranceFormatter.Format(new DetectedCall(
+    var clock = new ManualTimestampProvider(suspendTimers: true);
+    var visualStart = clock.GetTimestamp();
+    clock.Advance(TimeSpan.FromMilliseconds(600));
+    var queue = new AnnouncementQueue(capacity: 1, clock);
+    _ = queue.Enqueue("Sala extra.", clock.GetTimestamp(), visualStart);
+    clock.Advance(TimeSpan.FromMilliseconds(200));
+    var speech = new StubSpeechEngine(() =>
+    {
+        clock.Advance(TimeSpan.FromMilliseconds(200));
+        return new SynthesizedSpeech(new[] { 0.5f }, 22_050);
+    });
+    var output = new StubAudioOutput();
+    var player = new AnnouncementQueuePlayer(queue, speech, output, startDelay: TimeSpan.FromSeconds(2));
+
+    var playback = player.PlayNextAsync();
+    Equal(0, output.PlayCount, "Playback must wait for the native sound window.");
+    Equal(TimeSpan.FromSeconds(1), clock.LastTimerDelay.GetValueOrDefault(), "The delay must discount detection, queueing and synthesis.");
+    clock.Advance(TimeSpan.FromSeconds(1));
+    clock.FireSuspendedTimer();
+
+    Equal(AnnouncementPlaybackResult.Played, await playback.WaitAsync(TimeSpan.FromSeconds(2)), "Playback must start once the configured delay has elapsed.");
+    Equal(1, output.PlayCount, "The announcement must reach the output exactly once.");
+}
+
+static async Task ExpiredBeforeScheduledPlaybackAsync()
+{
+    var clock = new ManualTimestampProvider();
+    var visualStart = clock.GetTimestamp();
+    clock.Advance(TimeSpan.FromSeconds(1));
+    var queue = new AnnouncementQueue(capacity: 1, clock);
+    _ = queue.Enqueue("Sala extra.", clock.GetTimestamp(), visualStart);
+    var speech = new StubSpeechEngine(() => throw new InvalidOperationException("This announcement cannot be played in time."));
+    var output = new StubAudioOutput();
+    var player = new AnnouncementQueuePlayer(queue, speech, output, startDelay: TimeSpan.FromSeconds(16));
+
+    Equal(AnnouncementPlaybackResult.Expired, await player.PlayNextAsync(), "An announcement cannot begin at its exact expiry.");
+    Equal(0, output.PlayCount, "An announced delay must not extend validity.");
+}
+
+static async Task CancelsScheduledPlaybackAsync()
+{
+    var clock = new ManualTimestampProvider(suspendTimers: true);
+    var queue = new AnnouncementQueue(capacity: 1, clock);
+    _ = queue.Enqueue("Sala extra.", clock.GetTimestamp());
+    var speech = new StubSpeechEngine(() => new SynthesizedSpeech(new[] { 0.5f }, 22_050));
+    var output = new StubAudioOutput();
+    var player = new AnnouncementQueuePlayer(queue, speech, output, startDelay: TimeSpan.FromSeconds(2));
+    using var cancellation = new CancellationTokenSource();
+    var playback = player.PlayNextAsync(cancellation.Token);
+    False(playback.IsCompleted, "A delayed announcement must wait before playback.");
+
+    cancellation.Cancel();
+    try
+    {
+        await playback.WaitAsync(TimeSpan.FromSeconds(2));
+        throw new InvalidOperationException("Canceled playback reported success.");
+    }
+    catch (OperationCanceledException) when (playback.IsCanceled)
+    {
+        Equal(0, output.PlayCount, "Canceled announcements must not start output.");
+    }
+}
+
+static async Task RetriesUnavailableAudioDeviceAsync()
+{
+    var clock = new ManualTimestampProvider();
+    var queue = new AnnouncementQueue(capacity: 2, clock);
+    _ = queue.Enqueue("Sala um.", clock.GetTimestamp());
+    _ = queue.Enqueue("Sala dois.", clock.GetTimestamp());
+    var unavailable = new StubWavePlayer { InitializationError = new MmException(MmResult.NoDriver, "waveOutOpen") };
+    var recovered = new StubWavePlayer { CompleteOnPlay = true };
+    var devices = new Queue<StubWavePlayer>([unavailable, recovered]);
+    var output = new DefaultWindowsAudioOutput(() => devices.Dequeue());
+    var audio = new SynthesizedSpeech(new[] { 0.5f }, 22_050);
+    var synthesisCount = 0;
+    var speech = new StubSpeechEngine(() =>
+    {
+        synthesisCount++;
+        return audio;
+    });
+    var player = new AnnouncementQueuePlayer(queue, speech, output);
+
+    Equal(AnnouncementPlaybackResult.Played, await player.PlayNextAsync().WaitAsync(TimeSpan.FromSeconds(3)), "The first announcement must play after the output recovers.");
+    Equal("Sala um.", speech.LastText!, "Recovery must keep the first announcement.");
+    Equal(1, synthesisCount, "Retrying playback must reuse the synthesized samples.");
+    True(unavailable.Disposed && recovered.Disposed, "Both device handles must be released.");
+    var remaining = queue.Dequeue();
+    NotNull(remaining, "The next announcement must still be pending.");
+    Equal("Sala dois.", remaining.Text, "The retry must preserve the next queued announcement.");
+}
+
+static async Task ExpiresDuringAudioDeviceFailureAsync()
+{
+    var clock = new ManualTimestampProvider();
+    var detected = clock.GetTimestamp();
+    clock.Advance(TimeSpan.FromSeconds(14));
+    var audio = new SynthesizedSpeech(new[] { 0.5f }, 22_050);
+    var output = new StubAudioOutput(_ =>
+    {
+        clock.Advance(TimeSpan.FromSeconds(1));
+        return Task.FromException(new AudioOutputUnavailableException(new IOException("Simulated unavailable device.")));
+    });
+    var playback = new AnnouncementPlayback(new StubSpeechEngine(() => audio), output, clock);
+
+    False(await playback.PlayIfFreshAsync("Sala extra.", detected), "The announcement must expire at the original deadline.");
+    Equal(1, output.PlayCount, "There must be no retry after the deadline.");
+}
+
+static async Task CancelsAudioRetryDelayAsync()
+{
+    var clock = new ManualTimestampProvider(suspendTimers: true);
+    var audio = new SynthesizedSpeech(new[] { 0.5f }, 22_050);
+    var output = new StubAudioOutput(_ =>
+        Task.FromException(new AudioOutputUnavailableException(new IOException("Simulated unavailable device."))));
+    var playback = new AnnouncementPlayback(new StubSpeechEngine(() => audio), output, clock);
+    using var cancellation = new CancellationTokenSource();
+    var result = playback.PlayIfFreshAsync("Sala extra.", clock.GetTimestamp(), cancellation.Token);
+    False(result.IsCompleted, "A fresh announcement must wait to retry an unavailable output.");
+
+    cancellation.Cancel();
+    try
+    {
+        await result.WaitAsync(TimeSpan.FromSeconds(2));
+        throw new InvalidOperationException("Canceled retry reported success.");
+    }
+    catch (OperationCanceledException) when (result.IsCanceled)
+    {
+        Equal(1, output.PlayCount, "Cancellation must prevent the next output attempt.");
+    }
+}
+
+static async Task PlaysQueuedAnnouncementsInOrderAsync()
+{
+    var clock = new ManualTimestampProvider();
+    var queue = new AnnouncementQueue(capacity: 2, clock);
+    _ = queue.Enqueue("Sala um.", clock.GetTimestamp());
+    _ = queue.Enqueue("Sala dois.", clock.GetTimestamp());
+    var audio = new SynthesizedSpeech(new[] { 0.5f }, 22_050);
+    var speech = new StubSpeechEngine(() => audio);
+    var stopped = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+    var output = new StubAudioOutput(token => stopped.Task.WaitAsync(token));
+    var player = new AnnouncementQueuePlayer(queue, speech, output);
+    var first = player.PlayNextAsync();
+    try
+    {
+        Equal("Sala um.", speech.LastText!, "The first queued announcement must be synthesized first.");
+        False(first.IsCompleted, "Playback must wait for the output to finish.");
+        var concurrent = await player.PlayNextAsync().WaitAsync(TimeSpan.FromSeconds(2));
+        Equal(AnnouncementPlaybackResult.Busy, concurrent, "A concurrent consumer must not remove another announcement.");
+        Equal(1, output.PlayCount, "Only one announcement may reach the output while it is busy.");
+    }
+    finally
+    {
+        stopped.SetResult();
+    }
+
+    Equal(AnnouncementPlaybackResult.Played, await first.WaitAsync(TimeSpan.FromSeconds(2)), "The first announcement must complete.");
+    Equal(AnnouncementPlaybackResult.Played, await player.PlayNextAsync(), "The second announcement must still be pending.");
+    Equal("Sala dois.", speech.LastText!, "The second announcement must be synthesized next.");
+    Equal(2, output.PlayCount, "Two accepted announcements must play once each.");
+    Equal(AnnouncementPlaybackResult.NoPendingAnnouncement, await player.PlayNextAsync(), "An empty queue must not synthesize.");
+}
+
+static async Task SkipsExpiredQueuedAnnouncementsAsync()
+{
+    var clock = new ManualTimestampProvider();
+    var queue = new AnnouncementQueue(capacity: 3, clock);
+    _ = queue.Enqueue("Sala um.", clock.GetTimestamp());
+    _ = queue.Enqueue("Sala que vai vencer.", clock.GetTimestamp());
+    var audio = new SynthesizedSpeech(new[] { 0.5f }, 22_050);
+    var speech = new StubSpeechEngine(() => audio);
+    var stopped = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+    var output = new StubAudioOutput(token => stopped.Task.WaitAsync(token));
+    var player = new AnnouncementQueuePlayer(queue, speech, output);
+    var first = player.PlayNextAsync();
+    clock.Advance(TimeSpan.FromSeconds(15));
+    _ = queue.Enqueue("Sala atual.", clock.GetTimestamp());
+    stopped.SetResult();
+
+    Equal(AnnouncementPlaybackResult.Played, await first.WaitAsync(TimeSpan.FromSeconds(2)), "A started announcement must complete normally.");
+    Equal(AnnouncementPlaybackResult.Played, await player.PlayNextAsync(), "The current announcement must still play.");
+    Equal("Sala atual.", speech.LastText!, "An expired pending announcement must not be synthesized.");
+    Equal(2, output.PlayCount, "Only the started and current announcements may reach the device.");
+}
+
+static async Task ContinuesQueueAfterPlaybackFailureAsync()
+{
+    var clock = new ManualTimestampProvider();
+    var queue = new AnnouncementQueue(capacity: 2, clock);
+    _ = queue.Enqueue("Sala um.", clock.GetTimestamp());
+    _ = queue.Enqueue("Sala dois.", clock.GetTimestamp());
+    var audio = new SynthesizedSpeech(new[] { 0.5f }, 22_050);
+    var speech = new StubSpeechEngine(() => audio);
+    var attempts = 0;
+    var output = new StubAudioOutput(_ =>
+        ++attempts == 1 ? Task.FromException(new IOException("Simulated audio failure.")) : Task.CompletedTask);
+    var player = new AnnouncementQueuePlayer(queue, speech, output);
+
+    Throws<IOException>(
+        () => player.PlayNextAsync().GetAwaiter().GetResult(),
+        "The consumer must report an audio failure.");
+    Equal(AnnouncementPlaybackResult.Played, await player.PlayNextAsync(), "A failure must not block the next queued announcement.");
+    Equal("Sala dois.", speech.LastText!, "The remaining announcement must preserve its position.");
+}
+
+static void QueuesAnnouncementsInOrder()
+{
+    var clock = new ManualTimestampProvider();
+    var queue = new AnnouncementQueue(capacity: 2, clock);
+    var firstAt = clock.GetTimestamp();
+    Equal(AnnouncementEnqueueResult.Accepted, queue.Enqueue("Sala um.", firstAt), "First announcement must fit.");
+    clock.Advance(TimeSpan.FromSeconds(1));
+    var secondAt = clock.GetTimestamp();
+    Equal(AnnouncementEnqueueResult.Accepted, queue.Enqueue("Sala dois.", secondAt), "Second announcement must fit.");
+    Equal(AnnouncementEnqueueResult.Full, queue.Enqueue("Sala três.", secondAt), "A full queue must refuse the newcomer.");
+
+    var first = queue.Dequeue();
+    NotNull(first, "The oldest announcement must still be pending.");
+    Equal("Sala um.", first.Text, "The oldest announcement must come first.");
+    Equal(firstAt, first.DetectedTimestamp, "Enqueueing must preserve the original detection timestamp.");
+    var second = queue.Dequeue();
+    NotNull(second, "The second accepted announcement must still be pending.");
+    Equal("Sala dois.", second.Text, "The next announcement must keep its original position.");
+    True(queue.Dequeue() is null, "The rejected newcomer must not be pending.");
+}
+
+static void PrunesExpiredAnnouncements()
+{
+    var clock = new ManualTimestampProvider();
+    var queue = new AnnouncementQueue(capacity: 2, clock);
+    var early = clock.GetTimestamp();
+    clock.Advance(TimeSpan.FromSeconds(5));
+    var later = clock.GetTimestamp();
+    _ = queue.Enqueue("Sala um.", later);
+    _ = queue.Enqueue("Sala antiga.", early);
+
+    clock.Advance(TimeSpan.FromSeconds(10));
+    Equal(AnnouncementEnqueueResult.Expired, queue.Enqueue("Sala vencida.", early), "Age includes time before enqueueing.");
+    Equal(AnnouncementEnqueueResult.Accepted, queue.Enqueue("Sala dois.", clock.GetTimestamp()), "An expired item behind the head must free capacity.");
+
+    clock.Advance(TimeSpan.FromSeconds(5));
+    var fresh = queue.Dequeue();
+    NotNull(fresh, "A fresh announcement must survive cleanup.");
+    Equal("Sala dois.", fresh.Text, "Dequeueing must skip the item that just expired.");
+    True(queue.Dequeue() is null, "Expired announcements must not be returned later.");
+}
+
+static void ClearsPendingAnnouncements()
+{
+    var clock = new ManualTimestampProvider();
+    var queue = new AnnouncementQueue(capacity: 1, clock);
+    _ = queue.Enqueue("Sala anterior.", clock.GetTimestamp());
+    queue.Clear();
+    True(queue.Dequeue() is null, "Clearing the queue must drop every pending announcement.");
+
+    Equal(AnnouncementEnqueueResult.Accepted, queue.Enqueue("Sala atual.", clock.GetTimestamp()), "The queue must accept new announcements after being cleared.");
+    var current = queue.Dequeue();
+    NotNull(current, "The new announcement must be pending.");
+    Equal("Sala atual.", current.Text, "Only subsequent announcements may remain.");
+}
+
+static void EnforcesConcurrentQueueCapacity()
+{
+    var clock = new ManualTimestampProvider();
+    var queue = new AnnouncementQueue(capacity: 4, clock);
+    var accepted = 0;
+    Parallel.For(0, 32, index =>
+    {
+        if (queue.Enqueue($"Sala fictícia {index}.", clock.GetTimestamp()) == AnnouncementEnqueueResult.Accepted)
+        {
+            Interlocked.Increment(ref accepted);
+        }
+    });
+
+    Equal(4, accepted, "Concurrent submissions must not exceed the configured capacity.");
+    for (var index = 0; index < accepted; index++)
+    {
+        True(queue.Dequeue() is not null, "Every accepted announcement must be available once.");
+    }
+
+    True(queue.Dequeue() is null, "No extra announcement may remain.");
+}
+
+static async Task ExpiresBeforeSynthesisAsync()
+{
+    var clock = new ManualTimestampProvider();
+    var detected = clock.GetTimestamp();
+    var synthesisCalls = 0;
+    var audio = new SynthesizedSpeech(new float[] { 0.5f }, 22_050);
+    var speech = new StubSpeechEngine(() =>
+    {
+        synthesisCalls++;
+        return audio;
+    });
+    var output = new StubAudioOutput();
+    var playback = new AnnouncementPlayback(speech, output, clock);
+
+    clock.Advance(TimeSpan.FromMilliseconds(14_999));
+    True(await playback.PlayIfFreshAsync("Pessoa fictícia, sala extra.", detected), "A fresh announcement must play.");
+    True(ReferenceEquals(audio, output.LastSpeech), "Playback must receive the audio from the speech engine.");
+
+    clock.Advance(TimeSpan.FromMilliseconds(1));
+    False(await playback.PlayIfFreshAsync("Pessoa fictícia, sala extra.", detected), "The deadline is exclusive.");
+    Equal(1, synthesisCalls, "An expired announcement must not invoke synthesis.");
+    Equal(1, output.PlayCount, "Only the fresh announcement may play.");
+}
+
+static async Task ExpiresDuringSynthesisAsync()
+{
+    var clock = new ManualTimestampProvider();
+    var detected = clock.GetTimestamp();
+    clock.Advance(TimeSpan.FromSeconds(14));
+    var speech = new StubSpeechEngine(() =>
+    {
+        clock.Advance(TimeSpan.FromSeconds(2));
+        return new SynthesizedSpeech(new float[] { 0.5f }, 22_050);
+    });
+    var output = new StubAudioOutput();
+    var playback = new AnnouncementPlayback(speech, output, clock);
+
+    False(await playback.PlayIfFreshAsync("Pessoa fictícia, sala extra.", detected), "A late synthesis must be discarded.");
+    Equal(0, output.PlayCount, "Expired audio must not reach the device.");
+}
+
+static async Task CancelsBeforeAnnouncementPlaybackAsync()
+{
+    var clock = new ManualTimestampProvider();
+    using var cancellation = new CancellationTokenSource();
+    var speech = new StubSpeechEngine(() =>
+    {
+        cancellation.Cancel();
+        return new SynthesizedSpeech(new float[] { 0.5f }, 22_050);
+    });
+    var output = new StubAudioOutput();
+    var playback = new AnnouncementPlayback(speech, output, clock);
+    var result = playback.PlayIfFreshAsync("Pessoa fictícia, sala extra.", clock.GetTimestamp(), cancellation.Token);
+    try
+    {
+        await result;
+        throw new InvalidOperationException("Canceled synthesis must not lead to playback.");
+    }
+    catch (OperationCanceledException) when (result.IsCanceled)
+    {
+        Equal(0, output.PlayCount, "Canceled synthesis must not reach the device.");
+    }
+}
+
+static async Task VerifyWindowsAudioDeviceAsync()
+{
+    const int sampleRate = 22_050;
+    var output = new DefaultWindowsAudioOutput();
+    await output.PlayAsync(new SynthesizedSpeech(new float[sampleRate / 5], sampleRate))
+        .WaitAsync(TimeSpan.FromSeconds(5));
+
+    using var cancellation = new CancellationTokenSource();
+    var playback = output.PlayAsync(new SynthesizedSpeech(new float[sampleRate * 2], sampleRate), cancellation.Token);
+    cancellation.CancelAfter(TimeSpan.FromMilliseconds(100));
+    try
+    {
+        await playback.WaitAsync(TimeSpan.FromSeconds(5));
+        throw new InvalidOperationException("The device completed instead of acknowledging cancellation.");
+    }
+    catch (OperationCanceledException) when (playback.IsCanceled)
+    {
+        Console.WriteLine("PASS Windows audio device: silent playback completed and canceled.");
+    }
+}
+
+static async Task CancelsWindowsPlaybackAsync()
+{
+    var player = new StubWavePlayer();
+    var output = new DefaultWindowsAudioOutput(() => player);
+    var speech = new SynthesizedSpeech(new[] { 0f, 0.5f, -0.5f }, 22_050);
+    using var cancellation = new CancellationTokenSource();
+    var playback = output.PlayAsync(speech, cancellation.Token);
+
+    False(playback.IsCompleted, "Playback must await the device completion event.");
+    Equal(22_050, player.OutputWaveFormat.SampleRate, "Playback must preserve sample rate.");
+    Equal(1, player.OutputWaveFormat.Channels, "Faber output must play in mono.");
+    Equal(16, player.OutputWaveFormat.BitsPerSample, "Samples must be converted to PCM16.");
+    Throws<InvalidOperationException>(
+        () => output.PlayAsync(speech).GetAwaiter().GetResult(),
+        "Overlapping playback on the same output must be refused.");
+
+    cancellation.Cancel();
+    await player.StopRequested.Task.WaitAsync(TimeSpan.FromSeconds(2));
+    False(player.Disposed, "The device must acknowledge stopping before it can be disposed.");
+    player.Complete();
+
+    try
+    {
+        await playback.WaitAsync(TimeSpan.FromSeconds(2));
+        throw new InvalidOperationException("Canceled playback reported success.");
+    }
+    catch (OperationCanceledException) when (playback.IsCanceled)
+    {
+        True(player.Disposed, "Canceled playback must release the device.");
+    }
+}
+
+static async Task RecoversWindowsPlaybackAsync()
+{
+    var unavailable = new StubWavePlayer { InitializationError = new IOException("Simulated unavailable device.") };
+    var disconnected = new StubWavePlayer();
+    var recovered = new StubWavePlayer();
+    var devices = new Queue<StubWavePlayer>([unavailable, disconnected, recovered]);
+    var output = new DefaultWindowsAudioOutput(() => devices.Dequeue());
+    var speech = new SynthesizedSpeech(new[] { 0.5f }, 22_050);
+
+    Throws<IOException>(
+        () => output.PlayAsync(speech).GetAwaiter().GetResult(),
+        "An unavailable default device must report failure.");
+    True(unavailable.Disposed, "A failed initialization must release the device.");
+
+    var interrupted = output.PlayAsync(speech);
+    disconnected.Complete(new MmException(MmResult.NoDriver, "waveOutWrite"));
+    Throws<MmException>(
+        () => interrupted.WaitAsync(TimeSpan.FromSeconds(2)).GetAwaiter().GetResult(),
+        "A failure after playback started must keep its original type.");
+    True(disconnected.Disposed, "A failed playback must release the device.");
+
+    var next = output.PlayAsync(speech);
+    recovered.Complete();
+    await next.WaitAsync(TimeSpan.FromSeconds(2));
+    True(recovered.Disposed, "Successful playback must release the device.");
+}
+
+static async Task ScalesWindowsPlaybackVolumeAsync()
+{
+    var samples = new[] { 0.75f, -0.75f };
+    var speech = new SynthesizedSpeech(samples, 22_050);
+    var full = await ReadPlaybackSamplesAsync(volume: 1f);
+    var half = await ReadPlaybackSamplesAsync(volume: 0.5f);
+    var muted = await ReadPlaybackSamplesAsync(volume: 0f);
+
+    True(full.Positive > 0 && full.Negative < 0, "Full volume must preserve both sample polarities.");
+    True(Math.Abs(full.Positive - 2 * half.Positive) <= 1, "Half volume must halve positive amplitude.");
+    True(Math.Abs(full.Negative - 2 * half.Negative) <= 1, "Half volume must halve negative amplitude.");
+    Equal(((short)0, (short)0), muted, "Zero volume must produce silence.");
+    Equal(0.75f, samples[0], "Playback volume must not overwrite the synthesized positive sample.");
+    Equal(-0.75f, samples[1], "Playback volume must not overwrite the synthesized negative sample.");
+
+    async Task<(short Positive, short Negative)> ReadPlaybackSamplesAsync(float volume)
+    {
+        var player = new StubWavePlayer { Volume = 0.8f };
+        var output = new DefaultWindowsAudioOutput(() => player, volume);
+        var playback = output.PlayAsync(speech);
+        var bytes = new byte[4];
+        try
+        {
+            Equal(4, player.Source!.Read(bytes, 0, bytes.Length), "Every input sample must be played.");
+            Equal(0, player.Source.Read(bytes, 0, bytes.Length), "The stream must end at the same position.");
+            Equal(0.8f, player.Volume, "The adjustment must not change the device volume.");
+            return (
+                BinaryPrimitives.ReadInt16LittleEndian(bytes),
+                BinaryPrimitives.ReadInt16LittleEndian(bytes.AsSpan(2)));
+        }
+        finally
+        {
+            player.Complete();
+            await playback.WaitAsync(TimeSpan.FromSeconds(2));
+        }
+    }
+}
+
+static void RejectsInvalidPlaybackVolume()
+{
+    foreach (var volume in new[] { -0.01f, 1.01f, float.NaN, float.PositiveInfinity })
+    {
+        Throws<ArgumentOutOfRangeException>(
+            () => new DefaultWindowsAudioOutput(volume),
+            "Volume must be a finite fraction between zero and one.");
+    }
+}
+
+static string FaberTestUtterance() =>
+    CallUtteranceFormatter.Format(new DetectedCall(
         "ATENDIMENTO MÉDICO",
         IdentityKind.Name,
         "Pessoa Fictícia Teste",
         "sala extra",
         TimeSpan.Zero));
+
+static bool TryReadFaberPlaybackOptions(string[] args, out int volumePercent, out int delayMilliseconds)
+{
+    volumePercent = 100;
+    delayMilliseconds = 0;
+    if (args.Length < 2 || args.Length % 2 != 0)
+    {
+        return false;
+    }
+
+    for (var index = 2; index < args.Length; index += 2)
+    {
+        if (!int.TryParse(args[index + 1], out var value) || value < 0)
+        {
+            return false;
+        }
+
+        switch (args[index])
+        {
+            case "--volume" when value <= 100:
+                volumePercent = value;
+                break;
+            case "--delay-ms":
+                delayMilliseconds = value;
+                break;
+            default:
+                return false;
+        }
+    }
+
+    return true;
+}
+
+static async Task PlayFaberPreviewAsync(string modelDirectory, float volume, TimeSpan startDelay)
+{
+    using var cancellation = new CancellationTokenSource();
+    void Cancel(object? sender, ConsoleCancelEventArgs args)
+    {
+        args.Cancel = true;
+        cancellation.Cancel();
+    }
+
+    Console.CancelKeyPress += Cancel;
+    try
+    {
+        using var speech = new FaberSpeechEngine(modelDirectory);
+        var clock = TimeProvider.System;
+        var queue = new AnnouncementQueue(capacity: 1, clock);
+        var player = new AnnouncementQueuePlayer(queue, speech, new DefaultWindowsAudioOutput(volume), startDelay);
+        _ = queue.Enqueue(FaberTestUtterance(), clock.GetTimestamp());
+        if (await player.PlayNextAsync(cancellation.Token) != AnnouncementPlaybackResult.Played)
+        {
+            Console.WriteLine("The test announcement expired before playback.");
+        }
+    }
+    catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
+    {
+        Console.WriteLine("Playback canceled.");
+    }
+    finally
+    {
+        Console.CancelKeyPress -= Cancel;
+    }
+}
+
+static void VerifyFaberSynthesis(string modelDirectory, bool warmUp)
+{
+    var utterance = FaberTestUtterance();
     var elapsed = Stopwatch.StartNew();
     using var speech = new FaberSpeechEngine(modelDirectory);
     var initialization = elapsed.Elapsed;
+    if (warmUp)
+    {
+        elapsed.Restart();
+        True(speech.WarmUp(), "A fresh engine must perform warm-up.");
+        elapsed.Stop();
+        Console.WriteLine($"Faber warm-up: {elapsed.Elapsed.TotalMilliseconds:F0} ms.");
+        False(speech.WarmUp(), "Warm-up must not run again on the same engine.");
+    }
+
     elapsed.Restart();
     var audio = speech.Synthesize(utterance);
     elapsed.Stop();
@@ -1221,11 +1889,34 @@ static void VerifyFaberSynthesis(string modelDirectory)
     }
 
     True(peak > 0.001f, "The synthesized phrase must not be silent.");
+    False(speech.WarmUp(), "An engine that has already synthesized speech must be warm.");
     var duration = audio.Samples.Length / (double)audio.SampleRate;
     Console.WriteLine(
         $"PASS Faber: {audio.SampleRate} Hz, {duration:F2} s, " +
         $"initialization {initialization.TotalMilliseconds:F0} ms, " +
         $"synthesis {elapsed.Elapsed.TotalMilliseconds:F0} ms.");
+
+    if (warmUp)
+    {
+        var slow = speech.Synthesize(utterance, speed: 0.75f);
+        var fast = speech.Synthesize(utterance, speed: 1.25f);
+        Equal(audio.SampleRate, slow.SampleRate, "Slow speech must preserve the native sample rate.");
+        Equal(audio.SampleRate, fast.SampleRate, "Fast speech must preserve the native sample rate.");
+        True(
+            slow.Samples.Length > audio.Samples.Length && audio.Samples.Length > fast.Samples.Length,
+            "Speech duration must decrease as the requested speed increases.");
+
+        var slowDuration = slow.Samples.Length / (double)slow.SampleRate;
+        var fastDuration = fast.Samples.Length / (double)fast.SampleRate;
+        Console.WriteLine($"PASS Faber speed: 0.75x {slowDuration:F2} s, 1x {duration:F2} s, 1.25x {fastDuration:F2} s.");
+
+        foreach (var invalidSpeed in new[] { 0.49f, 2.01f, float.NaN, float.PositiveInfinity })
+        {
+            Throws<ArgumentOutOfRangeException>(
+                () => speech.Synthesize(utterance, invalidSpeed),
+                "Invalid speeds must be rejected before invoking the native engine.");
+        }
+    }
 }
 
 static void FormatsNamedCallUtterance()
@@ -2150,6 +2841,10 @@ static void ResetsPackagedOcrStabilityAcrossMixedTransition()
         secondDestination,
         replacementThird.DetectedCall.Destination,
         "Replacement OCR destination mismatch.");
+    Equal(
+        Ms(1_900),
+        replacementThird.DetectedCall.VisualStartedAt,
+        "The replacement must not inherit the onset of the earlier or conflicting OCR reading.");
 }
 
 static void ValidatesOcrComponentInventory()
@@ -3779,7 +4474,7 @@ sealed class RecordingOcrRegionReader : IOcrRegionReader
     }
 }
 
-sealed class StubScreenPixelCapture : IScreenPixelCapture
+sealed class StubScreenPixelCapture(Func<int, Rgb24Frame>? produceFrame = null) : IScreenPixelCapture
 {
     public int InvocationCount { get; private set; }
 
@@ -3789,6 +4484,11 @@ sealed class StubScreenPixelCapture : IScreenPixelCapture
     {
         InvocationCount++;
         LastRegion = region;
+        if (produceFrame is not null)
+        {
+            return produceFrame(InvocationCount);
+        }
+
         var pixels = new byte[checked(region.Width * region.Height * 3)];
         Array.Fill(pixels, (byte)245);
         return new Rgb24Frame(region.Width, region.Height, pixels);

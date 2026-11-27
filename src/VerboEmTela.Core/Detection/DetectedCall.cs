@@ -1,3 +1,5 @@
+using VerboEmTela.Core.Frames;
+
 namespace VerboEmTela.Core.Detection;
 
 public sealed record DetectedCall(
@@ -5,4 +7,9 @@ public sealed record DetectedCall(
     IdentityKind IdentityKind,
     string Identity,
     string Destination,
-    TimeSpan DetectedAt);
+    TimeSpan DetectedAt)
+{
+    public TimeSpan VisualStartedAt { get; init; } = DetectedAt;
+    public MonotonicTimestamp? VisualStartTimestamp { get; init; }
+    public MonotonicTimestamp? DetectionTimestamp { get; init; }
+}

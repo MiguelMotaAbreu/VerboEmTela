@@ -45,7 +45,8 @@ public sealed class ScreenFrameSource : IFrameSource
 
             yield return new CapturedFrame(
                 frame,
-                _timeProvider.GetElapsedTime(sourceStartedAt, capturedAt));
+                _timeProvider.GetElapsedTime(sourceStartedAt, capturedAt),
+                new MonotonicTimestamp(_timeProvider, capturedAt));
 
             var iterationElapsed = _timeProvider.GetElapsedTime(
                 iterationStartedAt,

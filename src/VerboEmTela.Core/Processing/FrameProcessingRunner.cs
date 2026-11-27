@@ -34,9 +34,7 @@ public sealed class FrameProcessingRunner
                 .WithCancellation(cancellationToken)
                 .ConfigureAwait(false))
             {
-                yield return _processor.Process(
-                    capturedFrame.Frame,
-                    capturedFrame.ObservedAt);
+                yield return _processor.Process(capturedFrame);
             }
         }
         finally

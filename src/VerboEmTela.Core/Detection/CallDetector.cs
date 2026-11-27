@@ -1,3 +1,5 @@
+using VerboEmTela.Core.Frames;
+
 namespace VerboEmTela.Core.Detection;
 
 public sealed class CallDetector
@@ -5,6 +7,8 @@ public sealed class CallDetector
     private readonly CallDetectorOptions _options;
     private Candidate? _candidate;
     private ObservationKey? _lastEmittedKey;
+    private ObservationTime? _firstIncompleteFullScreen;
+    private VisualPresentation? _presentation;
     private TimeSpan? _lastObservationTime;
     private bool _armed;
 
@@ -21,7 +25,20 @@ public sealed class CallDetector
         _candidate = null;
     }
 
-    public DetectedCall? Process(PanelObservation observation)
+    internal void ObserveIncompleteFullScreen(TimeSpan observedAt, MonotonicTimestamp? timestamp)
+    {
+        EnsureMonotonicTime(observedAt);
+        if (_presentation is null)
+        {
+            _firstIncompleteFullScreen ??= new ObservationTime(observedAt, timestamp);
+        }
+
+        DiscardPendingCandidate();
+    }
+
+    public DetectedCall? Process(PanelObservation observation) => Process(observation, null);
+
+    internal DetectedCall? Process(PanelObservation observation, MonotonicTimestamp? timestamp)
     {
         ArgumentNullException.ThrowIfNull(observation);
         EnsureMonotonicTime(observation.ObservedAt);
@@ -30,7 +47,7 @@ public sealed class CallDetector
         {
             PanelMode.Invalid => HandleInvalid(),
             PanelMode.Dashboard => HandleDashboard(),
-            PanelMode.FullScreenCall => HandleFullScreenCall(observation),
+            PanelMode.FullScreenCall => HandleFullScreenCall(observation, timestamp),
             _ => throw new ArgumentOutOfRangeException(
                 nameof(observation),
                 observation.Mode,
@@ -40,29 +57,26 @@ public sealed class CallDetector
 
     public void Reset()
     {
-        _candidate = null;
-        _lastEmittedKey = null;
+        ClearPresentation();
         _lastObservationTime = null;
         _armed = false;
     }
 
     private DetectedCall? HandleInvalid()
     {
-        _candidate = null;
-        _lastEmittedKey = null;
+        ClearPresentation();
         _armed = false;
         return null;
     }
 
     private DetectedCall? HandleDashboard()
     {
-        _candidate = null;
-        _lastEmittedKey = null;
+        ClearPresentation();
         _armed = true;
         return null;
     }
 
-    private DetectedCall? HandleFullScreenCall(PanelObservation observation)
+    private DetectedCall? HandleFullScreenCall(PanelObservation observation, MonotonicTimestamp? timestamp)
     {
         if (!_armed)
         {
@@ -70,6 +84,15 @@ public sealed class CallDetector
         }
 
         var key = ObservationKey.From(observation);
+        if (_presentation is null)
+        {
+            var start = _firstIncompleteFullScreen ?? new ObservationTime(observation.ObservedAt, timestamp);
+            _presentation = new VisualPresentation(key, start);
+        }
+        else if (_presentation.Key != key)
+        {
+            _presentation = new VisualPresentation(key, new ObservationTime(observation.ObservedAt, timestamp));
+        }
 
         if (_candidate is null || _candidate.Key != key)
         {
@@ -97,7 +120,20 @@ public sealed class CallDetector
             key.IdentityKind,
             key.Identity,
             key.Destination,
-            observation.ObservedAt);
+            observation.ObservedAt)
+        {
+            VisualStartedAt = _presentation.StartedAt.Elapsed,
+            VisualStartTimestamp = _presentation.StartedAt.Timestamp,
+            DetectionTimestamp = timestamp,
+        };
+    }
+
+    private void ClearPresentation()
+    {
+        _candidate = null;
+        _lastEmittedKey = null;
+        _firstIncompleteFullScreen = null;
+        _presentation = null;
     }
 
     private void EnsureMonotonicTime(TimeSpan observedAt)
@@ -127,6 +163,10 @@ public sealed class CallDetector
                 observation.Destination!);
         }
     }
+
+    private readonly record struct ObservationTime(TimeSpan Elapsed, MonotonicTimestamp? Timestamp);
+
+    private sealed record VisualPresentation(ObservationKey Key, ObservationTime StartedAt);
 
     private sealed record Candidate(
         ObservationKey Key,
